@@ -1,11 +1,6 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
-
-async function requireUserId(ctx: { auth: { getUserIdentity: () => Promise<{ subject: string } | null> } }) {
-  const identity = await ctx.auth.getUserIdentity();
-  if (!identity) throw new Error("Not authenticated");
-  return identity.subject;
-}
+import { requireUserId } from "./lib/auth";
 
 export const list = query({
   args: {},

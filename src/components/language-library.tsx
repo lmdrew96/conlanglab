@@ -1,12 +1,17 @@
 "use client";
 
 import { useState } from "react";
-import { useMutation, useQuery } from "convex/react";
+import { useConvexAuth, useMutation, useQuery } from "convex/react";
 import Link from "next/link";
 import { api } from "../../convex/_generated/api";
 
 export function LanguageLibrary() {
-  const languages = useQuery(api.languages.list);
+  const { isAuthenticated } = useConvexAuth();
+  // Skip until Clerk's client SDK has actually attached an auth token —
+  // otherwise this fires during the brief unauthenticated window on first
+  // load and throws instead of just waiting (a real race, not hypothetical:
+  // reproduces on every fresh page load without this guard).
+  const languages = useQuery(api.languages.list, isAuthenticated ? {} : "skip");
   const create = useMutation(api.languages.create);
   const remove = useMutation(api.languages.remove);
   const [name, setName] = useState("");

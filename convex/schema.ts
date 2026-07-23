@@ -99,10 +99,16 @@ export default defineSchema({
     languageId: v.id("languages"),
     stage: stageName,
     kind: v.union(v.literal("snapshot"), v.literal("diff")),
+    // For "snapshot" entries, the full stage data. For "diff" entries, a
+    // DiffOp[] (see convex/lib/history.ts) relative to the nearest prior
+    // snapshot in this same language+stage sequence.
     data: v.any(),
     trigger: v.union(v.literal("nudge"), v.literal("reroll"), v.literal("edit")),
+    // Monotonic per (languageId, stage) — lets reconstruction do an indexed
+    // `seq <= target` range scan instead of a table scan as history grows.
+    seq: v.number(),
     createdAt: v.number(),
-  }).index("by_language_stage", ["languageId", "stage", "createdAt"]),
+  }).index("by_language_stage", ["languageId", "stage", "seq"]),
 
   // Reserved, structural only in v1 (Section 10.4) — no UI reads/writes
   // these yet beyond what M8 builds.

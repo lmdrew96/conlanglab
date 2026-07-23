@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useQuery } from "convex/react";
+import { useConvexAuth, useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { Header } from "@/components/header";
@@ -23,7 +23,8 @@ const STAGE_MILESTONE = {
 };
 
 export function LanguageDetail({ id }: { id: string }) {
-  const language = useQuery(api.languages.get, { id: id as Id<"languages"> });
+  const { isAuthenticated } = useConvexAuth();
+  const language = useQuery(api.languages.get, isAuthenticated ? { id: id as Id<"languages"> } : "skip");
 
   if (language === undefined) {
     return (
@@ -60,24 +61,45 @@ export function LanguageDetail({ id }: { id: string }) {
         </div>
 
         <ul className="flex flex-col gap-2">
-          {STAGES.map(({ key, label }) => (
-            <li
-              key={key}
-              className="flex items-center justify-between rounded-md border border-border bg-surface px-4 py-3"
-            >
-              <div className="flex items-center gap-2">
-                <span className="font-medium text-text">{label}</span>
-                {language.lockedStages[key] && (
-                  <span className="rounded bg-accent px-1.5 py-0.5 text-xs font-medium text-accent-text">
-                    Locked
-                  </span>
-                )}
-              </div>
-              <span className="text-xs text-text-muted">
-                Generation engine ships in {STAGE_MILESTONE[key]}
-              </span>
-            </li>
-          ))}
+          {STAGES.map(({ key, label }) => {
+            const content = (
+              <>
+                <div className="flex items-center gap-2">
+                  <span className="font-medium text-text">{label}</span>
+                  {language.lockedStages[key] && (
+                    <span className="rounded bg-accent px-1.5 py-0.5 text-xs font-medium text-accent-text">
+                      Locked
+                    </span>
+                  )}
+                </div>
+                <span className="text-xs text-text-muted">
+                  {key === "phonology" ? "Open →" : `Generation engine ships in ${STAGE_MILESTONE[key]}`}
+                </span>
+              </>
+            );
+
+            if (key === "phonology") {
+              return (
+                <li key={key}>
+                  <Link
+                    href={`/language/${id}/phonology`}
+                    className="flex items-center justify-between rounded-md border border-border bg-surface px-4 py-3 hover:bg-surface-hover"
+                  >
+                    {content}
+                  </Link>
+                </li>
+              );
+            }
+
+            return (
+              <li
+                key={key}
+                className="flex items-center justify-between rounded-md border border-border bg-surface px-4 py-3"
+              >
+                {content}
+              </li>
+            );
+          })}
         </ul>
       </div>
     </div>
