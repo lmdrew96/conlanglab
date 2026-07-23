@@ -1,0 +1,73 @@
+@import "tailwindcss";
+
+/* Section 12: theme tokens. :root ships the Vernacular values as the
+   technical fallback that renders before the client resolves the user's
+   real preference (Section 12.2) — not a nudge toward Vernacular as
+   "the" default, just what avoids an unstyled flash on first paint. */
+:root {
+  --color-bg: #252226;
+  --color-surface: #363437;
+  --color-surface-hover: #444144;
+  --color-border: #545255;
+  --color-text: #b79872;
+  --color-text-muted: #7c8482;
+  --color-accent: #af8c62;
+  --color-accent-hover: #c4a17a;
+  --color-accent-text: #1a1a1a;
+}
+
+:root[data-theme="isogloss"] {
+  --color-bg: #272233;
+  --color-surface: #383443;
+  --color-surface-hover: #454150;
+  --color-border: #56525f;
+  --color-text: #f4a971;
+  --color-text-muted: #dd7057;
+  --color-accent: #dd7057;
+  --color-accent-hover: #e8896f;
+  --color-accent-text: #1a1a1a;
+}
+
+:root[data-theme="glossolalia"] {
+  --color-bg: #210124;
+  --color-surface: #331536;
+  --color-surface-hover: #402543;
+  --color-border: #523854;
+  --color-text: #f4fdaf;
+  --color-text-muted: #efdd8d;
+  --color-accent: #65743a;
+  --color-accent-hover: #78894a;
+  --color-accent-text: #ffffff;
+}
+
+:root[data-theme="prosody"] {
+  --color-bg: #420404;
+  --color-surface: #511818;
+  --color-surface-hover: #5c2727;
+  --color-border: #6b3b3b;
+  --color-text: #afcefd;
+  --color-text-muted: #9f8def;
+  --color-accent: #9f8def;
+  --color-accent-hover: #b09fef;
+  --color-accent-text: #1a1a1a;
+}
+
+@theme inline {
+  --color-bg: var(--color-bg);
+  --color-surface: var(--color-surface);
+  --color-surface-hover: var(--color-surface-hover);
+  --color-border: var(--color-border);
+  --color-text: var(--color-text);
+  --color-text-muted: var(--color-text-muted);
+  --color-accent: var(--color-accent);
+  --color-accent-hover: var(--color-accent-hover);
+  --color-accent-text: var(--color-accent-text);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans), Arial, Helvetica, sans-serif;
+}
