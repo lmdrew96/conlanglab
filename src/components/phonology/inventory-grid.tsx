@@ -3,16 +3,19 @@
 import { useMutation } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
-import type { PhonologyData } from "@/lib/phonology/engine";
+import type { ConsonantPhoneme, PhonologyData, VowelPhoneme } from "@/lib/phonology/engine";
 import { formatManner, formatPlace } from "@/lib/phonology/format";
+import { playPhoneme } from "@/lib/phonology/audio";
 
 function PhonemeChip({
+  phoneme,
   ipa,
   locked,
   tooltip,
   disabled,
   onToggleLock,
 }: {
+  phoneme: ConsonantPhoneme | VowelPhoneme;
   ipa: string;
   locked: boolean;
   tooltip: string;
@@ -20,20 +23,32 @@ function PhonemeChip({
   onToggleLock: () => void;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onToggleLock}
-      disabled={disabled}
-      title={tooltip}
-      className={`flex items-center gap-1 rounded-md border px-2 py-1 text-sm transition-colors ${
+    <span
+      className={`flex items-center gap-0.5 rounded-md border text-sm transition-colors ${
         locked
           ? "border-accent bg-accent/20 text-text"
           : "border-border bg-bg text-text-muted hover:bg-surface-hover"
-      } disabled:cursor-not-allowed disabled:opacity-60`}
+      }`}
     >
-      <span className="font-mono">{ipa}</span>
-      {locked && <span aria-hidden>🔒</span>}
-    </button>
+      <button
+        type="button"
+        onClick={() => playPhoneme(phoneme)}
+        title={`Play /${ipa}/`}
+        className="rounded-l-md py-1 pl-2 pr-0.5 hover:text-accent"
+      >
+        <span aria-hidden>🔊</span>
+      </button>
+      <button
+        type="button"
+        onClick={onToggleLock}
+        disabled={disabled}
+        title={tooltip}
+        className="flex items-center gap-1 rounded-r-md py-1 pl-0.5 pr-2 disabled:cursor-not-allowed disabled:opacity-60"
+      >
+        <span className="font-mono">{ipa}</span>
+        {locked && <span aria-hidden>🔒</span>}
+      </button>
+    </span>
   );
 }
 
@@ -56,6 +71,7 @@ export function InventoryGrid({
           {data.consonants.map((c) => (
             <PhonemeChip
               key={c.id}
+              phoneme={c}
               ipa={c.ipa}
               locked={c.locked}
               disabled={stageLocked}
@@ -73,6 +89,7 @@ export function InventoryGrid({
           {data.vowels.map((v) => (
             <PhonemeChip
               key={v.id}
+              phoneme={v}
               ipa={v.ipa}
               locked={v.locked}
               disabled={stageLocked}

@@ -35,11 +35,14 @@ function rankOf(manner: ConsonantManner, scale: SonorityScale): number {
 }
 
 /**
- * Grade a consonant cluster against SSP. Onset clusters must rise (or hold
- * flat) in sonority toward the nucleus; coda clusters must fall (or hold
- * flat) moving away from it. Both are read left-to-right in the order the
- * phonemes actually appear in the string, with the nucleus vowel implicitly
- * adjacent to the *last* element of an onset and the *first* element of a coda.
+ * Grade a consonant cluster against SSP. Per design doc Section 4.3, onset
+ * clusters must *rise* in sonority toward the nucleus and coda clusters must
+ * *fall* moving away from it — a flat plateau (same rank held, e.g. two
+ * stops back to back) is explicitly named as a violation ("stop+stop
+ * clusters ... no clear sonority rise"), not a tolerated edge case. Both are
+ * read left-to-right in the order the phonemes actually appear in the
+ * string, with the nucleus vowel implicitly adjacent to the *last* element
+ * of an onset and the *first* element of a coda.
  */
 export function gradeCluster(
   phonemes: ConsonantPhoneme[],
@@ -50,11 +53,11 @@ export function gradeCluster(
   const ranks = phonemes.map((p) => rankOf(p.features.manner, scale));
   if (position === "onset") {
     for (let i = 1; i < ranks.length; i++) {
-      if (ranks[i] < ranks[i - 1]) return "violation";
+      if (ranks[i] <= ranks[i - 1]) return "violation";
     }
   } else {
     for (let i = 1; i < ranks.length; i++) {
-      if (ranks[i] > ranks[i - 1]) return "violation";
+      if (ranks[i] >= ranks[i - 1]) return "violation";
     }
   }
   return "elegant";

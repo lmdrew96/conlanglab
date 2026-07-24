@@ -8,6 +8,7 @@
 export { generatePhonology, sampleClusters, sampleSyllables } from "../../../convex/phonology/generate";
 export { ALL_TARGETS, DEFAULT_PARAMS } from "../../../convex/phonology/types";
 
+export type { SampledUnit } from "../../../convex/phonology/generate";
 export type {
   ConsonantPhoneme,
   InventorySize,

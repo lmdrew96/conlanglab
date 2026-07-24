@@ -11,6 +11,9 @@ importers:
       '@clerk/nextjs':
         specifier: ^7.5.22
         version: 7.5.22(next@16.2.11(@babel/core@7.29.7)(react-dom@19.2.4(react@19.2.4))(react@19.2.4))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+      '@seansleblanc/pink-trombone':
+        specifier: ^1.0.1
+        version: 1.0.1
       convex:
         specifier: ^1.42.3
         version: 1.42.3(@clerk/react@6.12.6(react-dom@19.2.4(react@19.2.4))(react@19.2.4))(react@19.2.4)
@@ -717,6 +720,9 @@ packages:
 
   '@rtsao/scc@1.1.0':
     resolution: {integrity: sha512-zt6OdqaDoOnJ1ZYsCYGt9YmWzDXl4vQdKTyJev62gFhRGKdx7mcT54V9KIjg+d2wi9EXsPvAPKe7i7WjfVWB8g==}
+
+  '@seansleblanc/pink-trombone@1.0.1':
+    resolution: {integrity: sha512-5KoRdYJE2WoImNQraGzqL9H5SqEjZTXTAqp8lghY0nGLN2Feyrcmdg/2+Om0hjHyBRs/xGuUk0lpzWqS5vy/Mg==}
 
   '@stablelib/base64@1.0.1':
     resolution: {integrity: sha512-1bnPQqSxSuc3Ii6MhBysoWCg58j97aUjuCSZrGSmDxNqtytIi0k8utUenAwTZN4V5mXXYGsVUI9zeBqy+jBOSQ==}
@@ -3043,6 +3049,8 @@ snapshots:
   '@rolldown/pluginutils@1.0.1': {}
 
   '@rtsao/scc@1.1.0': {}
+
+  '@seansleblanc/pink-trombone@1.0.1': {}
 
   '@stablelib/base64@1.0.1': {}
 

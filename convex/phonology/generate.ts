@@ -15,7 +15,7 @@ import {
   VOWEL_INVENTORY_TARGET,
   VOWEL_MARKED_GATE,
 } from "./content";
-import { DEFAULT_SONORITY_SCALE, gradeCluster } from "./sonority";
+import { DEFAULT_SONORITY_SCALE } from "./sonority";
 import type {
   ConsonantManner,
   ConsonantPhoneme,
@@ -25,6 +25,7 @@ import type {
   PhonologyTarget,
   Seed,
   SonorityGradingData,
+  SonorityScale,
   StressData,
   StressPattern,
   SyllableTemplate,
@@ -193,15 +194,23 @@ const CLUSTERABLE_MANNERS: ConsonantManner[] = [
   "affricate",
 ];
 
+/**
+ * clusterComplexity feeds every cluster-related probability continuously
+ * (not just the 1..3 size ceiling) so the slider has a felt effect at every
+ * position, not just at the two points where the ceiling steps up.
+ */
 function buildPhonotactics(rng: Rng, params: PhonologyParams): PhonologyData["phonotactics"] {
-  const onsetMax = 1 + Math.round(params.clusterComplexity * 2); // 1..3
-  const codaMax = 1 + Math.round(params.clusterComplexity * 2); // 1..3
+  const cc = params.clusterComplexity;
+  const onsetMax = cc < 1 / 3 ? 1 : cc < 2 / 3 ? 2 : 3;
+  const codaMax = onsetMax;
 
   const templates: SyllableTemplate[] = [{ shape: ["C", "V"] }];
   if (rng.chance(0.8)) templates.push({ shape: ["C", "V", "C"] });
-  if (onsetMax >= 2 && rng.chance(0.6)) templates.push({ shape: ["C", "C", "V"] });
-  if (codaMax >= 2 && rng.chance(0.4)) templates.push({ shape: ["C", "V", "C", "C"] });
-  if (onsetMax >= 2 && codaMax >= 2 && rng.chance(0.25)) templates.push({ shape: ["C", "C", "V", "C", "C"] });
+  if (onsetMax >= 2 && rng.chance(0.3 + 0.5 * cc)) templates.push({ shape: ["C", "C", "V"] });
+  if (codaMax >= 2 && rng.chance(0.15 + 0.4 * cc)) templates.push({ shape: ["C", "V", "C", "C"] });
+  if (onsetMax >= 3 && rng.chance(0.15 * cc)) templates.push({ shape: ["C", "C", "C", "V"] });
+  if (codaMax >= 3 && rng.chance(0.15 * cc)) templates.push({ shape: ["C", "V", "C", "C", "C"] });
+  if (onsetMax >= 2 && codaMax >= 2 && rng.chance(0.1 + 0.3 * cc)) templates.push({ shape: ["C", "C", "V", "C", "C"] });
 
   const allowedManners = rng.shuffle(CLUSTERABLE_MANNERS).slice(0, rng.int(3, CLUSTERABLE_MANNERS.length));
 
@@ -251,8 +260,83 @@ function buildTone(rng: Rng): ToneData {
 const PREVIEW_SALT_SYLLABLES = 0xa11ce;
 const PREVIEW_SALT_ONSET = 0xc1055;
 const PREVIEW_SALT_CODA = 0xc1056;
-const MAX_CLUSTER_ATTEMPTS = 20;
 
+/** A sampled syllable or cluster, paired with its phonemes for audio playback. */
+export interface SampledUnit {
+  ipa: string;
+  phonemes: Array<ConsonantPhoneme | VowelPhoneme>;
+}
+
+function toUnit(phonemes: Array<ConsonantPhoneme | VowelPhoneme>): SampledUnit {
+  return { ipa: phonemes.map((p) => p.ipa).join(""), phonemes };
+}
+
+/** Group a language's consonants by sonority rank, restricted to `allowedManners`. */
+function tiersByRank(
+  consonants: ConsonantPhoneme[],
+  allowedManners: ConsonantManner[],
+  scale: SonorityScale,
+): Map<number, ConsonantPhoneme[]> {
+  const tiers = new Map<number, ConsonantPhoneme[]>();
+  for (const p of consonants) {
+    if (!allowedManners.includes(p.features.manner)) continue;
+    const rank = scale[p.features.manner];
+    const bucket = tiers.get(rank);
+    if (bucket) bucket.push(p);
+    else tiers.set(rank, [p]);
+  }
+  return tiers;
+}
+
+/** A random `k`-length ascending subsequence of `sortedValues` (which stays sorted). */
+function randomAscendingSubset<T>(rng: Rng, sortedValues: T[], k: number): T[] {
+  const indices = rng.shuffle(sortedValues.map((_, i) => i)).slice(0, k).sort((a, b) => a - b);
+  return indices.map((i) => sortedValues[i]);
+}
+
+/**
+ * Manners that are sonorants (nasals, liquids, glides) rather than obstruents.
+ * SSP violations (Section 4.3) are meant to simulate genuinely harsh but
+ * attested languages — obstruent pileups like Georgian/Polish consonant
+ * clusters — not sequences that don't occur in any language's phonotactics
+ * at all. Two sonorants of the *same* manner adjacent (e.g. two glides, two
+ * nasals, two liquids) is that latter case: they glide into each other with
+ * no real consonantal closure between them, so it reads as broken rather
+ * than harsh. That specific pattern is excluded even from the "deliberate
+ * override" path; everything else (obstruent-obstruent, obstruent-sonorant,
+ * differing sonorant manners) is fair game.
+ */
+const SONORANT_MANNERS = new Set<ConsonantManner>(["nasal", "trill", "tap", "lateralApproximant", "approximant"]);
+
+function hasSameMannerSonorantAdjacency(picks: ConsonantPhoneme[]): boolean {
+  for (let i = 1; i < picks.length; i++) {
+    const prev = picks[i - 1].features.manner;
+    const curr = picks[i].features.manner;
+    if (prev === curr && SONORANT_MANNERS.has(prev)) return true;
+  }
+  return false;
+}
+
+/** Deliberate-override draw for Section 4.3 — see SONORANT_MANNERS above for the one excluded pattern. */
+function pickHarshCluster(rng: Rng, consonants: ConsonantPhoneme[], size: number): ConsonantPhoneme[] {
+  const guardLimit = 20;
+  let picks: ConsonantPhoneme[] = [];
+  for (let attempt = 0; attempt < guardLimit; attempt++) {
+    picks = Array.from({ length: size }, () => rng.pick(consonants));
+    if (!hasSameMannerSonorantAdjacency(picks)) return picks;
+  }
+  return picks;
+}
+
+/**
+ * Build a cluster by construction rather than rejection-sampling: pick `size`
+ * distinct sonority tiers (ascending toward the nucleus for onsets, descending
+ * for codas) and draw one consonant from each. This guarantees an SSP-elegant
+ * result — never a random draw that happens to fail the grader — and finally
+ * makes `allowedManners` (Section 4.2) do something. When the language's
+ * inventory can't support the requested size, the cluster shrinks to what's
+ * actually available rather than forcing an invalid one.
+ */
 function pickCluster(
   rng: Rng,
   data: PhonologyData,
@@ -262,43 +346,79 @@ function pickCluster(
   if (size <= 0) return [];
   if (size === 1) return [rng.pick(data.consonants)];
 
-  for (let attempt = 0; attempt < MAX_CLUSTER_ATTEMPTS; attempt++) {
-    const cluster = Array.from({ length: size }, () => rng.pick(data.consonants));
-    const grade = gradeCluster(cluster, position, data.sonorityGrading.scaleRank);
-    if (grade === "elegant") return cluster;
-    if (data.sonorityGrading.allowViolations && rng.chance(data.sonorityGrading.violationRate)) return cluster;
+  if (data.sonorityGrading.allowViolations && rng.chance(data.sonorityGrading.violationRate)) {
+    // Deliberate override (Section 4.3) — a user who explicitly wants harsh
+    // clusters gets a genuinely unconstrained draw, not a softened one.
+    return pickHarshCluster(rng, data.consonants, size);
   }
-  // Sampling failed to find an elegant (or deliberately-allowed) cluster in
-  // the attempt budget — fall back to a single consonant rather than a
-  // sonority-violating one nobody asked for.
-  return [rng.pick(data.consonants)];
+
+  const allowedManners =
+    position === "onset" ? data.phonotactics.onsetClusters.allowedManners : data.phonotactics.codaClusters.allowedManners;
+  const tiers = tiersByRank(data.consonants, allowedManners, data.sonorityGrading.scaleRank);
+  const ranks = Array.from(tiers.keys()).sort((a, b) => a - b);
+  if (ranks.length === 0) return [rng.pick(data.consonants)];
+
+  const clusterSize = Math.min(size, ranks.length);
+  const chosenRanks = randomAscendingSubset(rng, ranks, clusterSize);
+  if (position === "coda") chosenRanks.reverse();
+
+  return chosenRanks.map((rank) => rng.pick(tiers.get(rank)!));
 }
 
-function buildSyllable(rng: Rng, data: PhonologyData): string {
+function buildSyllable(rng: Rng, data: PhonologyData): Array<ConsonantPhoneme | VowelPhoneme> {
   const template = rng.pick(data.phonotactics.templates);
   const vIndex = template.shape.indexOf("V");
   const onsetSize = vIndex;
   const codaSize = template.shape.length - vIndex - 1;
 
   const onset = pickCluster(rng, data, onsetSize, "onset");
-  const nucleus = rng.pick(data.vowels).ipa;
+  const nucleus = rng.pick(data.vowels);
   const coda = pickCluster(rng, data, codaSize, "coda");
 
-  return onset.map((p) => p.ipa).join("") + nucleus + coda.map((p) => p.ipa).join("");
+  return [...onset, nucleus, ...coda];
+}
+
+/**
+ * Draw up to `count` distinct-by-ipa units from `next()`. A small inventory
+ * or a narrow allowed-manner set can legitimately have fewer than `count`
+ * possible outputs — in that case this returns however many unique ones
+ * exist rather than padding with repeats, which would misrepresent the
+ * language as more varied than it is.
+ */
+function sampleUnique(count: number, maxAttempts: number, next: () => SampledUnit): SampledUnit[] {
+  const seen = new Set<string>();
+  const results: SampledUnit[] = [];
+  for (let attempt = 0; results.length < count && attempt < maxAttempts; attempt++) {
+    const unit = next();
+    if (seen.has(unit.ipa)) continue;
+    seen.add(unit.ipa);
+    results.push(unit);
+  }
+  return results;
 }
 
 /** Sample example syllables for the live preview panel. Read-only — never persisted. */
-export function sampleSyllables(data: PhonologyData, count: number): string[] {
+export function sampleSyllables(data: PhonologyData, count: number): SampledUnit[] {
   const rng = new Rng(deriveSeed(data.seed.base, PREVIEW_SALT_SYLLABLES));
-  return Array.from({ length: count }, () => buildSyllable(rng, data));
+  return sampleUnique(count, count * 15, () => toUnit(buildSyllable(rng, data)));
 }
 
-/** Sample example clusters at a given position for the live preview panel. */
-export function sampleClusters(data: PhonologyData, count: number, position: "onset" | "coda"): string[] {
+/**
+ * Sample example clusters at a given position for the live preview panel.
+ * Sizes are drawn from the full 2..maxSize range (weighted toward smaller,
+ * matching how often syllable templates actually produce each size) rather
+ * than always forcing the ceiling — so the preview reflects what the
+ * language actually sounds like, not just its most extreme case. Below a
+ * maxSize of 2, the position has no clusters at all.
+ */
+export function sampleClusters(data: PhonologyData, count: number, position: "onset" | "coda"): SampledUnit[] {
   const rng = new Rng(deriveSeed(data.seed.base, position === "onset" ? PREVIEW_SALT_ONSET : PREVIEW_SALT_CODA));
-  const size = Math.max(
-    2,
-    position === "onset" ? data.phonotactics.onsetClusters.maxSize : data.phonotactics.codaClusters.maxSize,
-  );
-  return Array.from({ length: count }, () => pickCluster(rng, data, size, position).map((p) => p.ipa).join(""));
+  const maxSize = position === "onset" ? data.phonotactics.onsetClusters.maxSize : data.phonotactics.codaClusters.maxSize;
+  if (maxSize < 2) return [];
+
+  const sizes = Array.from({ length: maxSize - 1 }, (_, i) => i + 2);
+  return sampleUnique(count, count * 15, () => {
+    const size = rng.weightedPick(sizes, (s) => 1 / s);
+    return toUnit(pickCluster(rng, data, size, position));
+  });
 }

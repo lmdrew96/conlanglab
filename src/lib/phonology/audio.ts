@@ -1,0 +1,201 @@
+// Client-only phoneme audio playback. Vowels, stops, nasals, approximants,
+// and taps/trills are driven by a real articulatory physical model (Pink
+// Trombone — a vocal-tract waveguide, not a trained voice or a filtered-
+// noise approximation; see pink-trombone-engine.ts + articulation.ts).
+//
+// Fricative/click frication noise is layered in separately using a
+// noise-burst synth: @seansleblanc/pink-trombone's Tract.runStep accepts a
+// turbulenceNoise parameter but never actually uses it (verified by reading
+// the source), so narrowing the tract alone produces no hiss. This is a
+// deliberate hybrid, not a fallback — the tract still shapes the resonance
+// correctly during a fricative, this just supplies the noise component it's
+// missing.
+
+import type { ConsonantPhoneme, ConsonantPlace, VowelPhoneme } from "../../../convex/phonology/types";
+import { scheduleUnits } from "./articulation";
+import { runGestures } from "./pink-trombone-engine";
+
+// --- Fricative/click noise layer (retained from the previous engine — tuned across several rounds) ---
+
+const FRICATIVE_HZ: Record<ConsonantPlace, number> = {
+  bilabial: 1000,
+  labiodental: 7600,
+  dental: 4800,
+  alveolar: 6500,
+  postalveolar: 3000,
+  retroflex: 2800,
+  palatal: 3200,
+  velar: 2000,
+  uvular: 1300,
+  pharyngeal: 1000,
+  glottal: 4000,
+};
+
+/** Where a voiceless stop's release burst is spectrally centered — same table shape as the old formant-synth engine's, reintroduced because the tract model's own transient turned out too weak to tell places apart by ear. */
+const BURST_HZ: Record<ConsonantPlace, number> = {
+  bilabial: 700,
+  labiodental: 1100,
+  dental: 1400,
+  alveolar: 3700,
+  postalveolar: 2600,
+  retroflex: 2200,
+  palatal: 2700,
+  velar: 1800,
+  uvular: 1000,
+  pharyngeal: 900,
+  glottal: 1500,
+};
+
+/**
+ * True sibilants (s,z,ʃ,ʒ...) have a real, strong, narrow resonant peak —
+ * the tongue channels air through a groove, producing genuine acoustic
+ * focus. Non-sibilant fricatives (θ,f,v,h,x...) are just diffuse turbulence
+ * with no comparable peak. The Q gap between the two needs to be large to
+ * read as a real category difference, not a subtle EQ tilt — the previous,
+ * much smaller gap (1.5 vs 1.8) is why θ/f were indistinguishable from s.
+ */
+const SIBILANT_PLACES = new Set<ConsonantPlace>(["alveolar", "postalveolar", "retroflex"]);
+
+function whiteNoiseBuffer(ctx: AudioContext, seconds: number): AudioBuffer {
+  const buffer = ctx.createBuffer(1, Math.max(1, Math.floor(ctx.sampleRate * seconds)), ctx.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+  return buffer;
+}
+
+function envelope(gainNode: GainNode, startAt: number, dur: number, peak: number): void {
+  const attack = Math.min(0.02, dur * 0.3);
+  const release = Math.min(0.05, dur * 0.3);
+  gainNode.gain.setValueAtTime(0, startAt);
+  gainNode.gain.linearRampToValueAtTime(peak, startAt + attack);
+  gainNode.gain.setValueAtTime(peak, startAt + dur - release);
+  gainNode.gain.linearRampToValueAtTime(0, startAt + dur);
+}
+
+/** See prior tuning notes: pre-roll lets a resonant filter settle before the envelope opens (avoids a "click"/"fuzz" transient), and the cascade+ceiling stops raw white noise's energy above ~10kHz reading as "static." */
+const FILTER_PRE_ROLL = 0.04;
+
+function playNoiseBurst(ctx: AudioContext, dest: AudioNode, centerHz: number, q: number, startAt: number, dur: number, peak: number): void {
+  const noiseStart = Math.max(0, startAt - FILTER_PRE_ROLL);
+  const noise = ctx.createBufferSource();
+  noise.buffer = whiteNoiseBuffer(ctx, startAt - noiseStart + dur + 0.02);
+
+  const bp1 = ctx.createBiquadFilter();
+  bp1.type = "bandpass";
+  bp1.frequency.value = centerHz;
+  bp1.Q.value = q;
+  const bp2 = ctx.createBiquadFilter();
+  bp2.type = "bandpass";
+  bp2.frequency.value = centerHz;
+  bp2.Q.value = q;
+  const ceiling = ctx.createBiquadFilter();
+  ceiling.type = "lowpass";
+  ceiling.frequency.value = 9000;
+  ceiling.Q.value = 0.5;
+
+  const env = ctx.createGain();
+  envelope(env, startAt, dur, peak);
+  noise.connect(bp1);
+  bp1.connect(bp2);
+  bp2.connect(ceiling);
+  ceiling.connect(env);
+  env.connect(dest);
+  noise.start(noiseStart);
+  noise.stop(startAt + dur + 0.02);
+}
+
+// The frication noise recipe no longer varies by voicing at all — voiced
+// fricatives got their own Q/gain treatment across a few tuning rounds to
+// try to cut through the tract's simultaneous voiced resonance, but that
+// was solving the wrong problem. The tract is now silenced for every
+// fricative regardless of voicing (see scheduleFricative) and voicing is
+// supplied separately below (playVoiceHum) — so voiced and voiceless
+// versions of the same place should just be this same noise, one with a hum
+// under it and one without. Same recipe that already made s/f sound right.
+function playFricativeNoise(ctx: AudioContext, dest: AudioNode, place: ConsonantPlace, startAt: number, dur: number): void {
+  const isSibilant = SIBILANT_PLACES.has(place);
+  const q = isSibilant ? 2.6 : 0.6;
+  const peak = isSibilant ? 0.42 : 0.22;
+  playNoiseBurst(ctx, dest, FRICATIVE_HZ[place], q, startAt, dur, peak);
+}
+
+/**
+ * Voicing for a voiced fricative — deliberately NOT routed through the
+ * physical tract model. A resonating tract (even quieted) has an inherent
+ * timbre that reads as a glide/approximant no matter its volume, because
+ * "voiced + narrow oral resonance" *is* what that sounds like. This is the
+ * same simple, decoupled low hum the pre-Pink-Trombone engine used
+ * successfully — just a low oscillator, no articulatory resonance to fight.
+ */
+function playVoiceHum(ctx: AudioContext, dest: AudioNode, startAt: number, dur: number): void {
+  const osc = ctx.createOscillator();
+  osc.type = "triangle"; // sawtooth's dense harmonics were what read as "buzz" in earlier tuning rounds — triangle's fall off much faster
+  osc.frequency.value = 110;
+  const lp = ctx.createBiquadFilter();
+  lp.type = "lowpass";
+  lp.frequency.value = 220;
+  lp.Q.value = 0.5;
+  const env = ctx.createGain();
+  envelope(env, startAt, dur, 0.22);
+  osc.connect(lp);
+  lp.connect(env);
+  env.connect(dest);
+  osc.start(startAt);
+  osc.stop(startAt + dur + 0.02);
+}
+
+function playStopBurst(ctx: AudioContext, dest: AudioNode, place: ConsonantPlace, startAt: number, dur: number): void {
+  playNoiseBurst(ctx, dest, BURST_HZ[place], 1.6, startAt, dur, 0.55);
+}
+
+function playClickNoise(ctx: AudioContext, dest: AudioNode, startAt: number): void {
+  playNoiseBurst(ctx, dest, 4500, 0.6, startAt, 0.008, 0.75);
+}
+
+// --- Orchestration ---
+
+/** Synthetic neutral vowel appended/prepended around a lone consonant or bare cluster for audio context only — never a claim about the language's actual phonotactics. */
+const CONTEXT_SCHWA: VowelPhoneme = {
+  id: "_context_schwa",
+  ipa: "ə",
+  features: { height: "mid", backness: "central", rounded: false },
+  tier: "core",
+  prerequisites: [],
+  locked: false,
+};
+
+async function play(units: Array<ConsonantPhoneme | VowelPhoneme>): Promise<void> {
+  const { steps, noiseEvents } = scheduleUnits(units);
+  const engine = await runGestures(steps);
+  const ctx = engine.AudioSystem.audioContext;
+  // ctx.destination, not scriptProcessor — the processor treats its inputs
+  // as algorithm parameters (aspiration/turbulence sources), not a
+  // pass-through mix, so this has to join the signal path in parallel at
+  // the same point scriptProcessor itself connects to, not feed into it.
+  const dest = ctx.destination;
+  const startAt = ctx.currentTime;
+  for (const event of noiseEvents) {
+    if (event.kind === "click") playClickNoise(ctx, dest, startAt + event.atOffset);
+    else if (event.kind === "stopBurst") playStopBurst(ctx, dest, event.place, startAt + event.atOffset, event.dur);
+    else {
+      playFricativeNoise(ctx, dest, event.place, startAt + event.atOffset, event.dur);
+      if (event.voiced) playVoiceHum(ctx, dest, startAt + event.atOffset, event.dur);
+    }
+  }
+}
+
+/** Play a single phoneme (consonant or vowel) immediately. A vowel plays alone; a consonant gets a trailing neutral vowel so the ear hears a real articulatory release instead of an isolated burst. */
+export function playPhoneme(phoneme: ConsonantPhoneme | VowelPhoneme): void {
+  const isVowel = "height" in phoneme.features;
+  void play(isVowel ? [phoneme] : [phoneme, CONTEXT_SCHWA]);
+}
+
+/** Play a sampled syllable (always contains exactly one real vowel — see generate.ts's buildSyllable). */
+export function playSequence(phonemes: Array<ConsonantPhoneme | VowelPhoneme>): void {
+  void play(phonemes);
+}
+
+/** Play a bare onset/coda cluster preview — these have no real vowel (see sampleClusters), so a neutral vowel is attached at the edge adjacent to where a syllable nucleus would sit. */
+export function playCluster(phonemes: ConsonantPhoneme[], position: "onset" | "coda"): void {
+  void play(position === "onset" ? [...phonemes, CONTEXT_SCHWA] : [CONTEXT_SCHWA, ...phonemes]);
+}
