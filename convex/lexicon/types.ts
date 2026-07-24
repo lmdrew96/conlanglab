@@ -97,6 +97,8 @@ export interface LexiconItemData {
   phonologicalForm: string;
   /** Flat list of phoneme catalog ids used to build this root — lets an upstream phonology edit that removes a phoneme flag exactly the roots that used it (Section 10.2a). */
   phonemeIds: string[];
+  /** Index into `phonemeIds` of the primary-stressed vowel (matches the ˈ mark in `phonologicalForm`) — undefined when the phonology's stress pattern is "none", or for roots generated before this field existed (audio playback falls back to uniform, unstressed timing in that case). */
+  stressedPhonemeIndex?: number;
   /** For compounds only: the two component concept ids whose roots were combined. */
   componentIds?: [string, string];
   seed: Seed;

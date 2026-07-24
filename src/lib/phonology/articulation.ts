@@ -5,10 +5,12 @@
 //
 // Tract shape is a 44-point diameter array from throat (0) to lips (43);
 // landmarks per the engine's own init: bladeStart≈10, tipStart≈32,
-// lipStart≈39. Constriction locations/widths below are a first-pass
-// approximation from general place/height/backness phonetics, not a
-// validated per-language area-function table (Story 2005 has real data for
-// this) — tunable by ear, same as everything else in this engine.
+// lipStart≈39. Vowel shaping (tongue-curve model) and consonant place
+// positions (PLACE_INDEX) and stop timing (VOT_BY_PLACE) are now fit
+// against real data — see each one's own comment for sources. Constriction
+// widths, closure/frication durations, and other manner-level timing not
+// called out in a specific table's comment are still first-pass
+// approximations, tunable by ear like everything else in this engine.
 //
 // One real, verified gap in @seansleblanc/pink-trombone: its Tract.runStep
 // accepts a `turbulenceNoise` parameter but never uses it anywhere in the
@@ -171,19 +173,72 @@ export function vowelShape(ipa: string): number[] {
   return d;
 }
 
-/** Where each place of articulation constricts the tract (throat=0 to lips=43). */
+/**
+ * Where each place of articulation constricts the tract (throat=0 to
+ * lips=43). Two real sources, not "first-pass approximation" guessing:
+ *
+ * 1. Ordering: the IPA chart's own column order (Bilabial, Labiodental,
+ *    Dental, Alveolar, Postalveolar, Retroflex, Palatal, Velar, Uvular,
+ *    Pharyngeal, Glottal — front to back) is authoritative and uncontroversial.
+ *    The previous table had retroflex(30) and postalveolar(29) swapped —
+ *    retroflex was placed in FRONT of postalveolar, when a curled-back
+ *    retroflex constriction is genuinely further back. Every other adjacent
+ *    pair was already in the right order.
+ * 2. Absolute positions: Coru's zakaton/Pink-Trombone reference (Tangle
+ *    note 01KY93EJ0Z7HJP8970SK09PV65, same source used for the vowel tongue-
+ *    curve fix) gives real calibrated index values for four places on this
+ *    SAME N=44 tract — bilabial 41, alveolar 36, postalveolar 31, velar 20 —
+ *    adopted directly below. The rest (pharyngeal, uvular, palatal,
+ *    retroflex, dental, labiodental) aren't in that reference; they're
+ *    interpolated between the real anchors, preserving the previous table's
+ *    relative spacing shifted onto the new anchor points, not re-guessed
+ *    from scratch.
+ */
 const PLACE_INDEX: Record<ConsonantPlace, number> = {
-  pharyngeal: 8,
-  uvular: 13,
-  velar: 18,
-  palatal: 25,
-  postalveolar: 29,
-  retroflex: 30,
-  alveolar: 31,
-  dental: 35,
-  labiodental: 39,
-  bilabial: 41,
-  glottal: 20, // no oral constriction — manner carried entirely by the glottis
+  pharyngeal: 10,
+  uvular: 15,
+  velar: 20, // zakaton anchor (g/k/ŋ)
+  palatal: 24,
+  retroflex: 28,
+  postalveolar: 31, // zakaton anchor (ʒ/ʃ)
+  alveolar: 36, // zakaton anchor (d/t, z/s, n)
+  dental: 38,
+  labiodental: 40,
+  bilabial: 41, // zakaton anchor (b/p, v/f, m) — labiodental kept 1 index behind rather than merged, since our model distinguishes them
+  // No oral constriction — manner carried entirely by the glottis (see
+  // scheduleFricative's isGlottal branch, the only place this is ever read
+  // for). Value is never used for shaping; kept distinct from every real
+  // place purely so this table has no accidental duplicate index.
+  glottal: 4,
+};
+
+/**
+ * Voiceless-stop aspiration duration (the breathy puff scheduleStop's
+ * release fires before modal voicing resumes — see its comment) — real
+ * Voice Onset Time, not a flat guess. Lisker & Abramson (1964), the classic
+ * cross-linguistic VOT study, measured English aspirated stops averaging
+ * p≈58ms, t≈70ms, k≈80ms: VOT lengthens systematically as place moves
+ * further back (more time needed for the larger cavity behind a posterior
+ * constriction to reach the pressure differential that triggers voicing).
+ * The previous code used a flat 0.05s for every place — no variation at
+ * all, the single biggest gap versus real place cues found so far. Only
+ * bilabial/alveolar/velar have real published anchors; the rest are
+ * piecewise-linear interpolated/extrapolated along those three points using
+ * PLACE_INDEX (itself now evidence-based — see its comment) as the
+ * position axis, not independently re-guessed.
+ */
+const VOT_BY_PLACE: Record<ConsonantPlace, number> = {
+  pharyngeal: 0.086,
+  uvular: 0.083,
+  velar: 0.08, // Lisker & Abramson anchor (k)
+  palatal: 0.0775,
+  retroflex: 0.075,
+  postalveolar: 0.073,
+  alveolar: 0.07, // Lisker & Abramson anchor (t)
+  dental: 0.065,
+  labiodental: 0.06,
+  bilabial: 0.058, // Lisker & Abramson anchor (p)
+  glottal: 0.05, // no real pulmonic VOT concept for glottal manner — kept at the old flat default
 };
 
 /** Approximants reuse vowel-adjacent shapes (j≈i, w≈u) rather than the place table — semivowels ARE vowel-like articulations. */
@@ -314,13 +369,24 @@ function closeFast(engine: PinkTromboneModule, shape: number[]): void {
 // pharyngeal) open slower still. Every "settle" window below accounts for
 // that instead of using one uniform short tail — without it the tract gets
 // redirected toward the next target before it ever reaches this one.
-function scheduleVowel(cursor: Cursor, phoneme: VowelPhoneme, dur: number, pitch: number, isLastVowel: boolean): void {
+//
+// `isStressed` applies the classic three correlates of lexical stress
+// (duration, pitch, intensity — Fry 1955) as a prominence boost on top of
+// the declination contour: duration is lengthened by the caller (see
+// scheduleUnits), pitch and tenseness are boosted here. Every multi-syllable
+// word previously had every vowel treated identically regardless of where
+// stress actually fell — reported directly as "not enough flow" — because
+// the stress index buildRoot already computes for the display IPA string
+// was discarded before reaching audio playback (see LexiconItemData's
+// stressedPhonemeIndex).
+function scheduleVowel(cursor: Cursor, phoneme: VowelPhoneme, dur: number, pitch: number, isLastVowel: boolean, isStressed: boolean): void {
   const shape = vowelShape(phoneme.ipa);
+  const stressBoost = isStressed ? 1.07 : 1;
   // Small per-play randomization on top of the contour — real speech never
   // repeats a word with bit-identical pitch/effort, and without this every
   // replay of the same root sounds like the exact same recording looping.
-  const jitteredPitch = pitch * (1 + (Math.random() - 0.5) * 0.02);
-  const jitteredTenseness = NEUTRAL_TENSENESS + (Math.random() - 0.5) * 0.04;
+  const jitteredPitch = pitch * stressBoost * (1 + (Math.random() - 0.5) * 0.02);
+  const jitteredTenseness = NEUTRAL_TENSENESS + (isStressed ? 0.05 : 0) + (Math.random() - 0.5) * 0.04;
   at(cursor, (e) => {
     e.Glottis.isTouched = true;
     e.Glottis.UIFrequency = jitteredPitch;
@@ -388,13 +454,14 @@ function scheduleStop(cursor: Cursor, place: ConsonantPlace, voiced: boolean, cl
   // acoustically; without it the release read as a near-silent transient.
   // This puff itself is fine even syllable-finally (it's breathy noise, not
   // a vowel) — only the modal-voicing resumption after it needs suppressing.
+  // Duration is real VOT, not a flat guess — see VOT_BY_PLACE.
   at(cursor, (e) => {
     e.Tract.movementSpeed = 24;
     e.Glottis.isTouched = true;
     e.Glottis.UITenseness = 0.05;
     setShape(e, closeInto);
   });
-  cursor.time += 0.05;
+  cursor.time += VOT_BY_PLACE[place];
   at(cursor, (e) => {
     e.Glottis.isTouched = !isFinal;
     if (!isFinal) e.Glottis.UITenseness = NEUTRAL_TENSENESS;
@@ -652,12 +719,21 @@ function scheduleTapOrTrill(cursor: Cursor, place: ConsonantPlace, manner: Conso
 }
 
 /** Build one continuous gesture schedule (+ noise-layer events) for a sequence of phonemes. */
-export function scheduleUnits(units: Array<ConsonantPhoneme | VowelPhoneme>): { steps: GestureStep[]; noiseEvents: NoiseEvent[]; totalDuration: number } {
+/**
+ * `stressedIndex` (absolute index into `units`, from LexiconItemData's
+ * stressedPhonemeIndex) marks the primary-stressed vowel. Only applied when
+ * the word actually has more than one vowel — stress is a relational,
+ * contrastive property between syllables, meaningless (and left as a no-op)
+ * for a single-syllable word even though pickStressIndex vacuously returns
+ * 0 for those too.
+ */
+export function scheduleUnits(units: Array<ConsonantPhoneme | VowelPhoneme>, stressedIndex?: number): { steps: GestureStep[]; noiseEvents: NoiseEvent[]; totalDuration: number } {
   const cursor: Cursor = { time: 0, steps: [], noiseEvents: [], lastPitch: VOICED_PITCH };
   const vowelPositions: number[] = [];
   units.forEach((u, idx) => { if (isVowelUnit(u)) vowelPositions.push(idx); });
   const totalVowels = vowelPositions.length;
   const lastVowelPosition = vowelPositions[vowelPositions.length - 1];
+  const hasStressContrast = totalVowels > 1 && stressedIndex !== undefined;
   let vowelIndex = 0;
 
   for (let i = 0; i < units.length; i++) {
@@ -665,7 +741,10 @@ export function scheduleUnits(units: Array<ConsonantPhoneme | VowelPhoneme>): { 
     if (isVowelUnit(unit)) {
       const isLast = i === units.length - 1;
       const pitch = contourPitch(vowelIndex, totalVowels);
-      scheduleVowel(cursor, unit, isLast ? 0.32 : 0.24, pitch, i === lastVowelPosition);
+      const isStressed = hasStressContrast && i === stressedIndex;
+      let dur = isLast ? 0.32 : 0.24;
+      if (hasStressContrast) dur *= isStressed ? 1.25 : 0.85;
+      scheduleVowel(cursor, unit, dur, pitch, i === lastVowelPosition, isStressed);
       vowelIndex++;
       continue;
     }

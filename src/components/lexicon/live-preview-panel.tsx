@@ -29,7 +29,7 @@ export function LivePreviewPanel({
               <span className="inline-flex items-center gap-1 font-mono text-text">
                 <button
                   type="button"
-                  onClick={() => playRoot(item.phonemeIds, phonology)}
+                  onClick={() => playRoot(item.phonemeIds, phonology, item.stressedPhonemeIndex)}
                   title={`Play /${item.phonologicalForm}/`}
                   className="hover:text-accent"
                 >

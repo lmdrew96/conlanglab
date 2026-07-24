@@ -32,10 +32,10 @@ export function resolveRootPhonemes(
   return resolved;
 }
 
-/** Resolve and play a root in one call. Returns false (and plays nothing) if any phoneme couldn't be resolved. */
-export function playRoot(phonemeIds: string[], phonology: PhonologyData): boolean {
+/** Resolve and play a root in one call. Returns false (and plays nothing) if any phoneme couldn't be resolved. `stressedPhonemeIndex` (LexiconItemData's field, absent for roots generated before stress-aware playback existed) drives duration/pitch prominence — see scheduleUnits. */
+export function playRoot(phonemeIds: string[], phonology: PhonologyData, stressedPhonemeIndex?: number): boolean {
   const resolved = resolveRootPhonemes(phonemeIds, phonology);
   if (!resolved) return false;
-  playSequence(resolved);
+  playSequence(resolved, stressedPhonemeIndex);
   return true;
 }

@@ -139,7 +139,7 @@ export function RootsTable({
                       <button
                         type="button"
                         disabled={row.staleSince != null}
-                        onClick={() => playRoot(data.phonemeIds, phonology)}
+                        onClick={() => playRoot(data.phonemeIds, phonology, data.stressedPhonemeIndex)}
                         title={row.staleSince != null ? "Regenerate to hear pronunciation" : `Play /${data.phonologicalForm}/`}
                         className="hover:text-accent disabled:cursor-not-allowed disabled:opacity-30"
                       >

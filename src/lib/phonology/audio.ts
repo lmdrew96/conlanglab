@@ -27,7 +27,11 @@ const FRICATIVE_HZ: Record<ConsonantPlace, number> = {
   // without landing in whistle territory.
   labiodental: 5000,
   dental: 4800,
-  alveolar: 6500,
+  // Was 6500 — real measured /s,z/ spectral peaks (Jongman, Wayland & Wong
+  // 2000, the standard reference for this) center around 4-5kHz, not
+  // 6.5kHz. postalveolar's 3000 already lands right on their measured
+  // ʃ/ʒ peak (~2.5-3kHz) — no change needed there.
+  alveolar: 5000,
   postalveolar: 3000,
   retroflex: 2800,
   palatal: 3200,
@@ -44,10 +48,15 @@ const FRICATIVE_HZ: Record<ConsonantPlace, number> = {
 
 /** Where a voiceless stop's release burst is spectrally centered — same table shape as the old formant-synth engine's, reintroduced because the tract model's own transient turned out too weak to tell places apart by ear. */
 const BURST_HZ: Record<ConsonantPlace, number> = {
+  // bilabial's 700 and velar's 1800 (below) already land right in published
+  // ranges (~600-800Hz and ~1800-2000Hz respectively — see Macquarie
+  // University's oral-stops acoustics reference) — no change needed there.
   bilabial: 700,
   labiodental: 1100,
   dental: 1400,
-  alveolar: 3700,
+  // Was 3700 — real /t,d/ burst energy sits above 4000Hz (same high-frequency
+  // region as /s/'s burst spectrum), not below it.
+  alveolar: 4200,
   postalveolar: 2600,
   retroflex: 2200,
   palatal: 2700,
@@ -198,8 +207,8 @@ const CONTEXT_SCHWA: VowelPhoneme = {
   locked: false,
 };
 
-async function play(units: Array<ConsonantPhoneme | VowelPhoneme>): Promise<void> {
-  const { steps, noiseEvents } = scheduleUnits(units);
+async function play(units: Array<ConsonantPhoneme | VowelPhoneme>, stressedIndex?: number): Promise<void> {
+  const { steps, noiseEvents } = scheduleUnits(units, stressedIndex);
   const engine = await runGestures(steps);
   const ctx = engine.AudioSystem.audioContext;
   // ctx.destination, not scriptProcessor — the processor treats its inputs
@@ -225,9 +234,9 @@ export function playPhoneme(phoneme: ConsonantPhoneme | VowelPhoneme): void {
   void play(isVowel ? [phoneme] : [phoneme, CONTEXT_SCHWA]);
 }
 
-/** Play a sampled syllable (always contains exactly one real vowel — see generate.ts's buildSyllable). */
-export function playSequence(phonemes: Array<ConsonantPhoneme | VowelPhoneme>): void {
-  void play(phonemes);
+/** Play a sampled syllable or root (always contains at least one real vowel). `stressedIndex` (absolute index into `phonemes`) marks the primary-stressed vowel — see scheduleUnits for how it affects timing/pitch. */
+export function playSequence(phonemes: Array<ConsonantPhoneme | VowelPhoneme>, stressedIndex?: number): void {
+  void play(phonemes, stressedIndex);
 }
 
 /** Play a bare onset/coda cluster preview — these have no real vowel (see sampleClusters), so a neutral vowel is attached at the edge adjacent to where a syllable nucleus would sit. */

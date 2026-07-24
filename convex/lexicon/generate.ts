@@ -85,12 +85,20 @@ function pickSyllableCount(rng: Rng): number {
   return rng.weightedPick([1, 2, 3], (n) => (n === 1 ? 5 : n === 2 ? 3 : 1));
 }
 
+/** Absolute index within `syllables.flat()` of the given syllable's own vowel — undefined if that syllable somehow has none (shouldn't happen for a well-formed syllable, but buildSyllable's contract isn't re-validated here). */
+function absoluteVowelIndex(syllables: Array<Array<ConsonantPhoneme | VowelPhoneme>>, syllableIndex: number): number | undefined {
+  let offset = 0;
+  for (let i = 0; i < syllableIndex; i++) offset += syllables[i].length;
+  const withinSyllable = syllables[syllableIndex].findIndex(isVowel);
+  return withinSyllable === -1 ? undefined : offset + withinSyllable;
+}
+
 /** Build a root's phonemes + rendered IPA form (syllable-dotted, primary-stress-marked). */
 function buildRoot(
   rng: Rng,
   phonology: PhonologyData,
   syllableCount: number,
-): { phonemeIds: string[]; phonologicalForm: string } {
+): { phonemeIds: string[]; phonologicalForm: string; stressedPhonemeIndex?: number } {
   const syllables: Array<Array<ConsonantPhoneme | VowelPhoneme>> = [];
   for (let i = 0; i < syllableCount; i++) syllables.push(buildSyllable(rng, phonology));
 
@@ -100,7 +108,11 @@ function buildRoot(
     .map((ipa, i) => (i === stressIndex ? `ˈ${ipa}` : ipa))
     .join(".");
 
-  return { phonemeIds: syllables.flat().map((p) => p.id), phonologicalForm: rendered };
+  return {
+    phonemeIds: syllables.flat().map((p) => p.id),
+    phonologicalForm: rendered,
+    stressedPhonemeIndex: stressIndex === -1 ? undefined : absoluteVowelIndex(syllables, stressIndex),
+  };
 }
 
 function buildRootItem(
@@ -128,12 +140,13 @@ function buildRootItem(
     meaning: meta.gloss,
     phonologicalForm: built.phonologicalForm,
     phonemeIds: built.phonemeIds,
+    stressedPhonemeIndex: built.stressedPhonemeIndex,
     seed,
     locked: false,
   };
 }
 
-/** Compounds carry no independent randomness — their form is a pure function of their components' current forms (Section 6.3). Primary stress lands on the first component, a common cross-linguistic compound-stress default. */
+/** Compounds carry no independent randomness — their form is a pure function of their components' current forms (Section 6.3). Primary stress lands on the first component, a common cross-linguistic compound-stress default — `a`'s stressed-phoneme index needs no offset since `a`'s phonemes come first in the concatenation. */
 function buildCompoundItem(compound: CompoundConcept, a: LexiconItemData, b: LexiconItemData, seed: Seed): LexiconItemData {
   const strip = (s: string) => s.replace(/ˈ/g, "");
   const form = `ˈ${strip(a.phonologicalForm)}.${strip(b.phonologicalForm)}`;
@@ -146,6 +159,7 @@ function buildCompoundItem(compound: CompoundConcept, a: LexiconItemData, b: Lex
     meaning: compound.gloss,
     phonologicalForm: form,
     phonemeIds: [...a.phonemeIds, ...b.phonemeIds],
+    stressedPhonemeIndex: a.stressedPhonemeIndex,
     componentIds: compound.components,
     seed,
     locked: false,
