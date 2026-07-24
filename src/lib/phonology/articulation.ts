@@ -207,7 +207,16 @@ function scheduleVowel(cursor: Cursor, phoneme: VowelPhoneme, dur: number): void
   cursor.time += dur;
 }
 
-function scheduleStop(cursor: Cursor, place: ConsonantPlace, voiced: boolean, closeInto: number[]): void {
+/**
+ * `isFinal` (nothing follows this consonant — it ends the syllable) matters
+ * because the release phase below opens the tract into `closeInto`, which
+ * for a syllable-final consonant is REST_SHAPE (see scheduleUnits) — a wide
+ * open tube. Keeping the glottis voiced while releasing into an open shape
+ * is exactly what a vowel *is* acoustically, so that's correct for an onset
+ * (a real vowel genuinely follows) but wrong for a coda (nothing does) —
+ * without this it reads as an appended schwa after every syllable-final stop.
+ */
+function scheduleStop(cursor: Cursor, place: ConsonantPlace, voiced: boolean, closeInto: number[], isFinal: boolean): void {
   const closure = 0.09;
   const index = PLACE_INDEX[place];
   at(cursor, (e) => {
@@ -227,8 +236,8 @@ function scheduleStop(cursor: Cursor, place: ConsonantPlace, voiced: boolean, cl
   if (voiced) {
     at(cursor, (e) => {
       e.Tract.movementSpeed = 24;
-      e.Glottis.isTouched = true;
-      e.Glottis.UITenseness = NEUTRAL_TENSENESS;
+      e.Glottis.isTouched = !isFinal;
+      if (!isFinal) e.Glottis.UITenseness = NEUTRAL_TENSENESS;
       setShape(e, closeInto);
     });
     cursor.time += 0.11;
@@ -239,6 +248,8 @@ function scheduleStop(cursor: Cursor, place: ConsonantPlace, voiced: boolean, cl
   // breathy (low-tenseness, maximizing the model's aspiration term) puff
   // before voicing engages. That gap is what "aspirated" actually is
   // acoustically; without it the release read as a near-silent transient.
+  // This puff itself is fine even syllable-finally (it's breathy noise, not
+  // a vowel) — only the modal-voicing resumption after it needs suppressing.
   at(cursor, (e) => {
     e.Tract.movementSpeed = 24;
     e.Glottis.isTouched = true;
@@ -247,16 +258,21 @@ function scheduleStop(cursor: Cursor, place: ConsonantPlace, voiced: boolean, cl
   });
   cursor.time += 0.05;
   at(cursor, (e) => {
-    e.Glottis.UITenseness = NEUTRAL_TENSENESS;
+    e.Glottis.isTouched = !isFinal;
+    if (!isFinal) e.Glottis.UITenseness = NEUTRAL_TENSENESS;
   });
   cursor.time += 0.06;
 }
 
-function scheduleEjective(cursor: Cursor, place: ConsonantPlace, closeInto: number[]): void {
+function scheduleEjective(cursor: Cursor, place: ConsonantPlace, closeInto: number[], isFinal: boolean): void {
   // Ejectives use a glottalic (not pulmonic) airstream — the glottis itself
   // closes and drives the release, not the lungs — so the closure carries
   // no voicing at all, and release is a sharp glottal pulse rather than
-  // gradually re-engaging voicing the way a plain stop's release does.
+  // gradually re-engaging voicing the way a plain stop's release does. The
+  // pulse itself (first step below) is the ejective's own characteristic
+  // release and fires regardless of position; only the settle-into-modal-
+  // voicing step after it is suppressed when nothing follows (see
+  // scheduleStop's isFinal comment — same reasoning).
   const closure = 0.1;
   const index = PLACE_INDEX[place];
   at(cursor, (e) => {
@@ -264,6 +280,12 @@ function scheduleEjective(cursor: Cursor, place: ConsonantPlace, closeInto: numb
     closeFast(e, constrict(closeInto, index, 3, 0));
   });
   cursor.time += closure;
+  // Ejectives build up oral pressure behind a glottalic closure rather than
+  // just lung pressure, so the release is genuinely sharper than a plain
+  // pulmonic stop's — never quieter. scheduleStop gets this same burst; its
+  // absence here (an oversight, not a deliberate omission) is why /pʼ/ read
+  // as softer than /p/ instead of at least as sharp.
+  cursor.noiseEvents.push({ atOffset: cursor.time, dur: 0.016, place, voiced: false, kind: "stopBurst" });
   at(cursor, (e) => {
     e.Tract.movementSpeed = 24;
     e.Glottis.isTouched = true;
@@ -272,12 +294,13 @@ function scheduleEjective(cursor: Cursor, place: ConsonantPlace, closeInto: numb
   });
   cursor.time += 0.035;
   at(cursor, (e) => {
-    e.Glottis.UITenseness = NEUTRAL_TENSENESS;
+    e.Glottis.isTouched = !isFinal;
+    if (!isFinal) e.Glottis.UITenseness = NEUTRAL_TENSENESS;
   });
   cursor.time += 0.04;
 }
 
-function scheduleImplosive(cursor: Cursor, place: ConsonantPlace, closeInto: number[]): void {
+function scheduleImplosive(cursor: Cursor, place: ConsonantPlace, closeInto: number[], isFinal: boolean): void {
   const closure = 0.1;
   const index = PLACE_INDEX[place];
   at(cursor, (e) => {
@@ -288,8 +311,9 @@ function scheduleImplosive(cursor: Cursor, place: ConsonantPlace, closeInto: num
   cursor.time += closure;
   at(cursor, (e) => {
     e.Tract.movementSpeed = 24;
+    e.Glottis.isTouched = !isFinal;
     e.Glottis.UIFrequency = VOICED_PITCH;
-    e.Glottis.UITenseness = NEUTRAL_TENSENESS;
+    if (!isFinal) e.Glottis.UITenseness = NEUTRAL_TENSENESS;
     setShape(e, closeInto);
   });
   cursor.time += 0.09;
@@ -347,10 +371,33 @@ function scheduleFricative(cursor: Cursor, place: ConsonantPlace, voiced: boolea
   cursor.time += dur;
 }
 
+/**
+ * An affricate is a stop released DIRECTLY into a same-place fricative — not
+ * a stop that first settles into whatever comes *after* the affricate and
+ * only then adds a frication tail. The previous version delegated to the
+ * full scheduleStop, whose release phase opens the tract toward the
+ * following phoneme (e.g. a vowel) and holds it there for ~0.1s before this
+ * function's own frication step snapped the tract back to a narrow
+ * constriction at the affricate's own place. Audibly that's: closure, open
+ * toward the vowel, yank back to a fricative, open toward the vowel again —
+ * two competing consonants, not one merged affricate. Inlining just the
+ * closure (mirroring scheduleStop's own closure step) and going straight
+ * into frication fixes the handoff: the transition to whatever comes next is
+ * left entirely to that next unit's own scheduling, exactly like a
+ * standalone fricative already does.
+ */
 function scheduleAffricate(cursor: Cursor, place: ConsonantPlace, voiced: boolean, closeInto: number[]): void {
-  scheduleStop(cursor, place, voiced, closeInto);
-  const dur = 0.07;
+  const closure = 0.09;
   const index = PLACE_INDEX[place];
+  at(cursor, (e) => {
+    e.Glottis.isTouched = voiced;
+    if (!voiced) e.Glottis.intensity = 0;
+    closeFast(e, constrict(closeInto, index, 3, 0));
+  });
+  cursor.time += closure;
+  cursor.noiseEvents.push({ atOffset: cursor.time, dur: 0.016, place, voiced, kind: "stopBurst" });
+
+  const dur = 0.07;
   at(cursor, (e) => {
     // See scheduleFricative — tract fully silent, base is REST_SHAPE (not
     // the anticipated next shape) for the same reason: keeps this brief
@@ -399,7 +446,7 @@ function scheduleApproximant(cursor: Cursor, phoneme: ConsonantPhoneme): void {
   cursor.time += dur;
 }
 
-function scheduleTapOrTrill(cursor: Cursor, place: ConsonantPlace, manner: ConsonantManner, closeInto: number[]): void {
+function scheduleTapOrTrill(cursor: Cursor, place: ConsonantPlace, manner: ConsonantManner, closeInto: number[], isFinal: boolean): void {
   const pulses = manner === "trill" ? 3 : 1;
   // Closing and opening aren't symmetric (see the comment above
   // scheduleVowel) — an even split meant the reopening half never actually
@@ -424,6 +471,10 @@ function scheduleTapOrTrill(cursor: Cursor, place: ConsonantPlace, manner: Conso
   }
   at(cursor, (e) => {
     e.Tract.movementSpeed = 24; // back to the baseline set in runGestures, not the library's original default
+    // Same reasoning as scheduleStop's isFinal: the last pulse's `openDur`
+    // settles into `closeInto`, which is REST_SHAPE when nothing follows —
+    // holding voicing into that open shape reads as an appended vowel.
+    if (isFinal) e.Glottis.isTouched = false;
   });
   cursor.time += 0.04;
 }
@@ -441,17 +492,18 @@ export function scheduleUnits(units: Array<ConsonantPhoneme | VowelPhoneme>): { 
     }
 
     const next = units[i + 1];
+    const isFinal = next === undefined;
     const closeInto = next ? anticipatedShape(next) : REST_SHAPE;
     const { manner, place, voiced } = unit.features;
     switch (manner) {
       case "stop":
-        scheduleStop(cursor, place, voiced, closeInto);
+        scheduleStop(cursor, place, voiced, closeInto, isFinal);
         break;
       case "ejective":
-        scheduleEjective(cursor, place, closeInto);
+        scheduleEjective(cursor, place, closeInto, isFinal);
         break;
       case "implosive":
-        scheduleImplosive(cursor, place, closeInto);
+        scheduleImplosive(cursor, place, closeInto, isFinal);
         break;
       case "nasal":
         scheduleNasal(cursor, place, closeInto);
@@ -472,7 +524,7 @@ export function scheduleUnits(units: Array<ConsonantPhoneme | VowelPhoneme>): { 
         break;
       case "trill":
       case "tap":
-        scheduleTapOrTrill(cursor, place, manner, closeInto);
+        scheduleTapOrTrill(cursor, place, manner, closeInto, isFinal);
         break;
     }
   }

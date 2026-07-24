@@ -12,6 +12,8 @@
 // time, not scheduling independent one-shot sounds the way the old
 // formant/noise synthesis did.
 
+import { REST_SHAPE } from "./articulation";
+
 export interface PinkTromboneModule {
   AudioSystem: {
     audioContext: AudioContext;
@@ -90,6 +92,17 @@ export async function runGestures(steps: GestureStep[]): Promise<PinkTromboneMod
   // an articulation. Reset every call in case a trill's temporary boost
   // (see articulation.ts) leaked through.
   engine.Tract.movementSpeed = 24;
+  // This is a shared singleton voice (see file header) — without this reset,
+  // a new sequence starts moving from whatever shape the PREVIOUS button
+  // click happened to leave the tract at, not from silence/rest the way a
+  // real isolated utterance would. If that leftover shape was open and the
+  // first gesture here is a voiced closure (e.g. a nasal), the audible
+  // transition from "wherever it was left open" to "closed" plays as a
+  // phantom vowel before the actual first consonant (reported: /mtʃ/ as
+  // /ɛmtʃ/). Snapping both diameter and targetDiameter — not just the
+  // target — means there's no leftover interpolation to catch either.
+  engine.Tract.diameter.set(REST_SHAPE);
+  engine.Tract.targetDiameter.set(REST_SHAPE);
   for (const step of steps) {
     const id = setTimeout(() => step.apply(engine), Math.max(0, step.at * 1000));
     pendingTimeouts.push(id);
