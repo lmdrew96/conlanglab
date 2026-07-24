@@ -22,6 +22,11 @@ const STAGE_MILESTONE = {
   orthography: "M6",
 };
 
+const STAGE_ROUTES: Partial<Record<keyof typeof STAGE_MILESTONE, string>> = {
+  phonology: "phonology",
+  lexicon: "lexicon",
+};
+
 export function LanguageDetail({ id }: { id: string }) {
   const { isAuthenticated } = useConvexAuth();
   const language = useQuery(api.languages.get, isAuthenticated ? { id: id as Id<"languages"> } : "skip");
@@ -73,16 +78,17 @@ export function LanguageDetail({ id }: { id: string }) {
                   )}
                 </div>
                 <span className="text-xs text-text-muted">
-                  {key === "phonology" ? "Open →" : `Generation engine ships in ${STAGE_MILESTONE[key]}`}
+                  {STAGE_ROUTES[key] ? "Open →" : `Generation engine ships in ${STAGE_MILESTONE[key]}`}
                 </span>
               </>
             );
 
-            if (key === "phonology") {
+            const route = STAGE_ROUTES[key];
+            if (route) {
               return (
                 <li key={key}>
                   <Link
-                    href={`/language/${id}/phonology`}
+                    href={`/language/${id}/${route}`}
                     className="flex items-center justify-between rounded-md border border-border bg-surface px-4 py-3 hover:bg-surface-hover"
                   >
                     {content}

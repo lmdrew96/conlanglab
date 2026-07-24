@@ -9,6 +9,13 @@
  */
 
 import type * as languages from "../languages.js";
+import type * as lexicon_content from "../lexicon/content.js";
+import type * as lexicon_diff from "../lexicon/diff.js";
+import type * as lexicon_generate from "../lexicon/generate.js";
+import type * as lexicon_mutations from "../lexicon/mutations.js";
+import type * as lexicon_queries from "../lexicon/queries.js";
+import type * as lexicon_staleness from "../lexicon/staleness.js";
+import type * as lexicon_types from "../lexicon/types.js";
 import type * as lib_auth from "../lib/auth.js";
 import type * as lib_history from "../lib/history.js";
 import type * as lib_rng from "../lib/rng.js";
@@ -28,6 +35,13 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   languages: typeof languages;
+  "lexicon/content": typeof lexicon_content;
+  "lexicon/diff": typeof lexicon_diff;
+  "lexicon/generate": typeof lexicon_generate;
+  "lexicon/mutations": typeof lexicon_mutations;
+  "lexicon/queries": typeof lexicon_queries;
+  "lexicon/staleness": typeof lexicon_staleness;
+  "lexicon/types": typeof lexicon_types;
   "lib/auth": typeof lib_auth;
   "lib/history": typeof lib_history;
   "lib/rng": typeof lib_rng;

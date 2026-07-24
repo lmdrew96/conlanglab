@@ -3,12 +3,20 @@ import { mutation } from "../_generated/server";
 import { requireLanguageOwner } from "../lib/auth";
 import { appendHistory, reconstructAt } from "../lib/history";
 import { freshSeed } from "../lib/rng";
+// Cross-stage staleness (Section 10.2a) — only this file knows when an
+// inventory edit actually happened, so it's the one place that flags
+// downstream lexicon roots stale rather than lexicon polling phonology.
+import { flagStaleLexiconItems } from "../lexicon/staleness";
 import { diffPhonology } from "./diff";
 import { generatePhonology } from "./generate";
 import { ALL_TARGETS, DEFAULT_PARAMS } from "./types";
 import type { PhonologyData, PhonologyTarget } from "./types";
 import type { MutationCtx } from "../_generated/server";
 import type { Id } from "../_generated/dataModel";
+
+function currentPhonemeIds(data: PhonologyData): Set<string> {
+  return new Set([...data.consonants.map((c) => c.id), ...data.vowels.map((v) => v.id)]);
+}
 
 const targetValidator = v.union(
   v.literal("inventory"),
@@ -86,16 +94,18 @@ export const reroll = mutation({
     if (row.locked) throw new Error("Phonology stage is locked");
 
     const previous = row.data as PhonologyData;
+    const targets = resolveTargets(target);
     const data = generatePhonology({
       seed: { base: freshSeed(), variation: 0 },
       params: params ?? previous.params,
       previous,
-      targets: resolveTargets(target),
+      targets,
       mode: "reroll",
       now: Date.now(),
     });
 
     await ctx.db.patch(row._id, { data });
+    if (targets.includes("inventory")) await flagStaleLexiconItems(ctx, languageId, currentPhonemeIds(data));
     await appendHistory(ctx, { languageId, stage: "phonology", data, trigger: "reroll", diffFn: diffPhonology });
   },
 });
@@ -108,16 +118,18 @@ export const nudge = mutation({
     if (row.locked) throw new Error("Phonology stage is locked");
 
     const previous = row.data as PhonologyData;
+    const targets = resolveTargets(target);
     const data = generatePhonology({
       seed: { base: previous.seed.base, variation: previous.seed.variation + 1 },
       params: params ?? previous.params,
       previous,
-      targets: resolveTargets(target),
+      targets,
       mode: "nudge",
       now: Date.now(),
     });
 
     await ctx.db.patch(row._id, { data });
+    if (targets.includes("inventory")) await flagStaleLexiconItems(ctx, languageId, currentPhonemeIds(data));
     await appendHistory(ctx, { languageId, stage: "phonology", data, trigger: "nudge", diffFn: diffPhonology });
   },
 });
@@ -287,6 +299,10 @@ export const revertToHistoryEntry = mutation({
     });
 
     await ctx.db.patch(row._id, { data: reconstructed });
+    // A revert can restore an older inventory that dropped phonemes newer
+    // roots depend on — always re-check, unlike reroll/nudge which only
+    // check when the "inventory" target was actually in play.
+    await flagStaleLexiconItems(ctx, languageId, currentPhonemeIds(reconstructed));
     await appendHistory(ctx, {
       languageId,
       stage: "phonology",

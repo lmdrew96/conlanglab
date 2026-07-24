@@ -67,17 +67,32 @@ export default defineSchema({
     .index("by_language", ["languageId"])
     .index("by_morphology", ["morphologyId"]),
 
-  // ~500 individually-lockable roots (Section 6.1). Staleness is tracked
-  // per item, not as one blanket flag on the collection (Section 10.2a).
-  lexiconItems: defineTable({
+  // Stage-level document (Section 10.1): seed + params (domain weights) +
+  // generation metadata. The ~500 roots themselves live in lexiconItems
+  // below, not nested here — item-level locking (Section 9.1) needs
+  // targeted per-root writes, which a single nested array can't give.
+  lexicon: defineTable({
     languageId: v.id("languages"),
-    phonologicalForm: v.string(),
-    meaning: v.string(),
-    partOfSpeech: v.string(),
-    derivationalRelationships: v.optional(v.any()),
+    data: v.optional(v.any()),
     locked: v.boolean(),
     staleSince: v.union(v.number(), v.null()),
   }).index("by_language", ["languageId"]),
+
+  // ~500 individually-lockable roots (Section 6.1). Staleness is tracked
+  // per item, not as one blanket flag on the collection (Section 10.2a).
+  // `conceptId` is a top-level field (not buried in `data`) so a single
+  // root can be looked up directly for item-level nudge/reroll/lock
+  // without scanning the whole collection.
+  lexiconItems: defineTable({
+    languageId: v.id("languages"),
+    lexiconId: v.id("lexicon"),
+    conceptId: v.string(),
+    data: v.optional(v.any()),
+    locked: v.boolean(),
+    staleSince: v.union(v.number(), v.null()),
+  })
+    .index("by_language", ["languageId"])
+    .index("by_language_concept", ["languageId", "conceptId"]),
 
   syntax: defineTable({
     languageId: v.id("languages"),

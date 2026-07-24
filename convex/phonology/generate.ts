@@ -365,7 +365,8 @@ function pickCluster(
   return chosenRanks.map((rank) => rng.pick(tiers.get(rank)!));
 }
 
-function buildSyllable(rng: Rng, data: PhonologyData): Array<ConsonantPhoneme | VowelPhoneme> {
+/** Exported for reuse by the Lexicon Engine (Section 6.1) — roots are built from the same syllable/phonotactic logic, not a parallel implementation. */
+export function buildSyllable(rng: Rng, data: PhonologyData): Array<ConsonantPhoneme | VowelPhoneme> {
   const template = rng.pick(data.phonotactics.templates);
   const vIndex = template.shape.indexOf("V");
   const onsetSize = vIndex;
