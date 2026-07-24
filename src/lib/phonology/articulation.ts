@@ -187,8 +187,29 @@ function anticipatedShape(unit: ConsonantPhoneme | VowelPhoneme): number[] {
   }
 }
 
-const VOICED_PITCH = 115;
-const NEUTRAL_TENSENESS = 0.55;
+// 115Hz sits dead-center of the adult-male F0 range (~85-180Hz); adult female
+// averages ~200-220Hz. We can't shorten the modeled vocal tract without
+// invalidating the hand-measured vowel formant table above, so pitch (+ a
+// touch more vocal tension, i.e. less breathy/"soft-spoken") is the only
+// lever available for shifting the perceived voice younger/more feminine.
+const VOICED_PITCH = 175;
+const NEUTRAL_TENSENESS = 0.6;
+
+/**
+ * A dead-flat F0 across the whole word was the single biggest "robot" cue —
+ * bigger than any segmental (place/manner) detail. Real declarative speech
+ * does two things pitch-wise: it drifts gently downward syllable-to-syllable
+ * (declination) and drops further on the last syllable (the "statement fall"
+ * that signals "utterance complete"). vowelIndex/totalVowels stands in for
+ * time-through-the-word since vowels are the prosodically prominent nuclei
+ * and are roughly evenly spaced — a real duration-weighted timeline isn't
+ * worth the complexity here.
+ */
+function contourPitch(vowelIndex: number, totalVowels: number): number {
+  if (totalVowels <= 1) return VOICED_PITCH * 1.01;
+  const t = vowelIndex / (totalVowels - 1);
+  return VOICED_PITCH * (1.02 - 0.04 * t);
+}
 
 export interface NoiseEvent {
   /** Seconds from the start of this schedule. */
@@ -203,6 +224,16 @@ interface Cursor {
   time: number;
   steps: GestureStep[];
   noiseEvents: NoiseEvent[];
+  /**
+   * Pitch most recently voiced, captured at schedule-build time (not read
+   * live inside a gesture closure — by playback time every gesture for the
+   * whole word has already been built, so a closure reading `cursor.lastPitch`
+   * directly would see the LAST vowel's pitch, not "whatever was current when
+   * this consonant was scheduled"). Lets voiced consonants between vowels
+   * (nasals, approximants, implosive release) continue the same contour
+   * instead of snapping back to a flat baseline every time.
+   */
+  lastPitch: number;
 }
 
 function at(cursor: Cursor, apply: (engine: PinkTromboneModule) => void): void {
@@ -231,15 +262,35 @@ function closeFast(engine: PinkTromboneModule, shape: number[]): void {
 // pharyngeal) open slower still. Every "settle" window below accounts for
 // that instead of using one uniform short tail — without it the tract gets
 // redirected toward the next target before it ever reaches this one.
-function scheduleVowel(cursor: Cursor, phoneme: VowelPhoneme, dur: number): void {
+function scheduleVowel(cursor: Cursor, phoneme: VowelPhoneme, dur: number, pitch: number, isLastVowel: boolean): void {
   const shape = vowelShape(phoneme.ipa);
+  // Small per-play randomization on top of the contour — real speech never
+  // repeats a word with bit-identical pitch/effort, and without this every
+  // replay of the same root sounds like the exact same recording looping.
+  const jitteredPitch = pitch * (1 + (Math.random() - 0.5) * 0.02);
+  const jitteredTenseness = NEUTRAL_TENSENESS + (Math.random() - 0.5) * 0.04;
   at(cursor, (e) => {
     e.Glottis.isTouched = true;
-    e.Glottis.UIFrequency = VOICED_PITCH;
-    e.Glottis.UITenseness = NEUTRAL_TENSENESS;
+    e.Glottis.UIFrequency = jitteredPitch;
+    e.Glottis.UITenseness = jitteredTenseness;
     setShape(e, shape);
   });
+  if (isLastVowel) {
+    // Statement-final fall: pitch tapers down through the back half of the
+    // word's last voiced nucleus. Spread over several small steps rather
+    // than one jump — the engine's pitch smoothing converges on a single
+    // big jump in ~2 audio blocks (~24ms), which reads as a hard glide
+    // ("autotune scoop") instead of a natural gradual fall.
+    const fallStartFrac = 0.4;
+    const fallSteps = 4;
+    for (let s = 1; s <= fallSteps; s++) {
+      const stepFrac = s / fallSteps;
+      const target = jitteredPitch * (1 - 0.06 * stepFrac);
+      cursor.steps.push({ at: cursor.time + dur * (fallStartFrac + (1 - fallStartFrac) * stepFrac), apply: (e) => { e.Glottis.UIFrequency = target; } });
+    }
+  }
   cursor.time += dur;
+  cursor.lastPitch = jitteredPitch;
 }
 
 /**
@@ -344,10 +395,11 @@ function scheduleImplosive(cursor: Cursor, place: ConsonantPlace, closeInto: num
     closeFast(e, constrict(closeInto, index, 3, 0));
   });
   cursor.time += closure;
+  const pitch = cursor.lastPitch;
   at(cursor, (e) => {
     e.Tract.movementSpeed = 24;
     e.Glottis.isTouched = !isFinal;
-    e.Glottis.UIFrequency = VOICED_PITCH;
+    e.Glottis.UIFrequency = pitch;
     if (!isFinal) e.Glottis.UITenseness = NEUTRAL_TENSENESS;
     setShape(e, closeInto);
   });
@@ -357,9 +409,10 @@ function scheduleImplosive(cursor: Cursor, place: ConsonantPlace, closeInto: num
 function scheduleNasal(cursor: Cursor, place: ConsonantPlace, closeInto: number[]): void {
   const dur = 0.18;
   const index = PLACE_INDEX[place];
+  const pitch = cursor.lastPitch;
   at(cursor, (e) => {
     e.Glottis.isTouched = true;
-    e.Glottis.UIFrequency = VOICED_PITCH;
+    e.Glottis.UIFrequency = pitch;
     e.Glottis.UITenseness = NEUTRAL_TENSENESS;
     e.Tract.velumTarget = 0.4;
     closeFast(e, constrict(closeInto, index, 3, 0));
@@ -472,9 +525,10 @@ function scheduleApproximant(cursor: Cursor, phoneme: ConsonantPhoneme): void {
   // own identity away for the whole hold instead of just handing off at
   // the boundary.
   const shape = approximantShape(phoneme, REST_SHAPE);
+  const pitch = cursor.lastPitch;
   at(cursor, (e) => {
     e.Glottis.isTouched = true;
-    e.Glottis.UIFrequency = VOICED_PITCH;
+    e.Glottis.UIFrequency = pitch;
     e.Glottis.UITenseness = NEUTRAL_TENSENESS;
     setShape(e, shape);
   });
@@ -516,13 +570,20 @@ function scheduleTapOrTrill(cursor: Cursor, place: ConsonantPlace, manner: Conso
 
 /** Build one continuous gesture schedule (+ noise-layer events) for a sequence of phonemes. */
 export function scheduleUnits(units: Array<ConsonantPhoneme | VowelPhoneme>): { steps: GestureStep[]; noiseEvents: NoiseEvent[]; totalDuration: number } {
-  const cursor: Cursor = { time: 0, steps: [], noiseEvents: [] };
+  const cursor: Cursor = { time: 0, steps: [], noiseEvents: [], lastPitch: VOICED_PITCH };
+  const vowelPositions: number[] = [];
+  units.forEach((u, idx) => { if (isVowelUnit(u)) vowelPositions.push(idx); });
+  const totalVowels = vowelPositions.length;
+  const lastVowelPosition = vowelPositions[vowelPositions.length - 1];
+  let vowelIndex = 0;
 
   for (let i = 0; i < units.length; i++) {
     const unit = units[i];
     if (isVowelUnit(unit)) {
       const isLast = i === units.length - 1;
-      scheduleVowel(cursor, unit, isLast ? 0.32 : 0.24);
+      const pitch = contourPitch(vowelIndex, totalVowels);
+      scheduleVowel(cursor, unit, isLast ? 0.32 : 0.24, pitch, i === lastVowelPosition);
+      vowelIndex++;
       continue;
     }
 
