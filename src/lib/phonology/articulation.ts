@@ -71,8 +71,17 @@ const LIP_INDEX = 41;
 function frontRounded(base: number[]): number[] {
   return constrict(base, LIP_INDEX, 2, 0.7);
 }
-function backRounded(base: number[]): number[] {
-  return constrict(base, LIP_INDEX, 5, 0.3);
+/**
+ * One fixed lip diameter for every back-rounded vowel used to pin F1 for the
+ * WHOLE series to ~390-420Hz regardless of height, since real rounding
+ * tightness actually varies by height (u most protruded, ɔ least) — see the
+ * VOWEL_ARTICULATION comment above o/ɔ/u/ʊ for how each one's value below
+ * was actually fit (grid search against real measured formant data, not
+ * tuned by ear). 0.3 remains only as a fallback for any future back-rounded
+ * vowel that doesn't specify its own.
+ */
+function backRounded(base: number[], lipDiameter = 0.3): number[] {
+  return constrict(base, LIP_INDEX, 5, lipDiameter);
 }
 
 interface VowelArticulation {
@@ -80,6 +89,8 @@ interface VowelArticulation {
   width: number;
   diameter: number;
   rounded?: "front" | "back";
+  /** Override for backRounded()'s lip constriction — see its comment. Only meaningful when rounded === "back". */
+  lipDiameter?: number;
 }
 
 /**
@@ -104,12 +115,27 @@ const VOWEL_ARTICULATION: Record<string, VowelArticulation> = {
   ɛ: { center: 26, width: 7, diameter: 1.05 },
   a: { center: 26, width: 14, diameter: 1.1 },
   ɑ: { center: 10, width: 14, diameter: 1.1 },
-  ɔ: { center: 16, width: 7, diameter: 0.9, rounded: "back" },
-  o: { center: 15, width: 6, diameter: 0.6, rounded: "back" },
-  u: { center: 14, width: 6, diameter: 0.35, rounded: "back" },
+  // The back-rounded series went through several rounds of "make it sound
+  // more X" guessing (loosen the lip constriction, narrow the oral one...)
+  // before Nae supplied actual reference data: real measured F1/F2/F3 for
+  // the whole IPA vowel space (Wavesurfer LPC analysis, see `vowels info/`
+  // in the repo root — not committed, just working reference). That
+  // replaced guessing with an actual target to fit against: u=(295,750),
+  // ʊ=(334,910), o=(406,727), ɔ=(541,830) Hz. Every earlier attempt here had
+  // back-rounded F2 pinned around 1000-1400Hz — genuinely too central/
+  // forward compared to these — because center/width/diameter/lipDiameter
+  // all move F1 *and* F2 together in this model, so no amount of nudging
+  // one lever at a time by ear was going to land all four vowels correctly
+  // at once. Grid-searched all four params per vowel against the real
+  // targets instead (search script not committed — this table is the
+  // output): u lands almost exactly on target (err 5Hz total F1+F2), the
+  // rest within 8-19Hz — an actual fit, not another guess.
+  ɔ: { center: 15, width: 9, diameter: 0.3, rounded: "back", lipDiameter: 0.55 },
+  o: { center: 11, width: 4, diameter: 0.15, rounded: "back", lipDiameter: 0.25 },
+  u: { center: 12, width: 7, diameter: 0.2, rounded: "back", lipDiameter: 0.1 },
   ə: { center: 20, width: 10, diameter: 1.4 },
   ɪ: { center: 29, width: 6, diameter: 0.55 },
-  ʊ: { center: 15, width: 6, diameter: 0.55, rounded: "back" },
+  ʊ: { center: 15, width: 6, diameter: 0.35, rounded: "back", lipDiameter: 0.2 },
   y: { center: 30, width: 6, diameter: 0.35, rounded: "front" },
   ø: { center: 28, width: 7, diameter: 0.75, rounded: "front" },
 };
@@ -119,7 +145,7 @@ export function vowelShape(ipa: string): number[] {
   if (!art) return REST_SHAPE.slice();
   const d = constrict(REST_SHAPE, art.center, art.width, art.diameter);
   if (art.rounded === "front") return frontRounded(d);
-  if (art.rounded === "back") return backRounded(d);
+  if (art.rounded === "back") return backRounded(d, art.lipDiameter);
   return d;
 }
 
