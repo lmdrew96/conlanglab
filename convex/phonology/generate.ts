@@ -201,7 +201,13 @@ const CLUSTERABLE_MANNERS: ConsonantManner[] = [
  */
 function buildPhonotactics(rng: Rng, params: PhonologyParams): PhonologyData["phonotactics"] {
   const cc = params.clusterComplexity;
-  const onsetMax = cc < 1 / 3 ? 1 : cc < 2 / 3 ? 2 : 3;
+  // Even thirds meant the bottom third of the slider (0 to 0.333) was flat
+  // "no clusters at all" (see sampleClusters's maxSize<2 gate) — and worse,
+  // the default clusterComplexity (0.3, see DEFAULT_PARAMS) fell inside that
+  // dead zone, so a fresh phonology showed zero example clusters out of the
+  // box. A true no-cluster language is real (Hawaiian, Japanese) and worth
+  // keeping reachable at the low end, just not across a third of the range.
+  const onsetMax = cc < 0.15 ? 1 : cc < 0.55 ? 2 : 3;
   const codaMax = onsetMax;
 
   const templates: SyllableTemplate[] = [{ shape: ["C", "V"] }];
