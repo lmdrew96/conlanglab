@@ -217,7 +217,7 @@ export interface NoiseEvent {
   dur: number;
   place: ConsonantPlace;
   voiced: boolean;
-  kind: "fricative" | "click" | "stopBurst";
+  kind: "fricative" | "click" | "stopBurst" | "ejectiveBurst";
 }
 
 interface Cursor {
@@ -368,10 +368,12 @@ function scheduleEjective(cursor: Cursor, place: ConsonantPlace, closeInto: numb
   cursor.time += closure;
   // Ejectives build up oral pressure behind a glottalic closure rather than
   // just lung pressure, so the release is genuinely sharper than a plain
-  // pulmonic stop's — never quieter. scheduleStop gets this same burst; its
-  // absence here (an oversight, not a deliberate omission) is why /pʼ/ read
-  // as softer than /p/ instead of at least as sharp.
-  cursor.noiseEvents.push({ atOffset: cursor.time, dur: 0.016, place, voiced: false, kind: "stopBurst" });
+  // pulmonic stop's — never quieter. A prior fix gave this the exact same
+  // `stopBurst` rendering scheduleStop uses (fixing "quieter than /p/") but
+  // that made /pʼ/ and /p/ indistinguishable instead — same noise burst,
+  // same everything. `ejectiveBurst` is its own rendering (see audio.ts) so
+  // the two are audibly distinct again, not just equally loud.
+  cursor.noiseEvents.push({ atOffset: cursor.time, dur: 0.016, place, voiced: false, kind: "ejectiveBurst" });
   at(cursor, (e) => {
     e.Tract.movementSpeed = 24;
     e.Glottis.isTouched = true;
@@ -430,7 +432,23 @@ function scheduleNasal(cursor: Cursor, place: ConsonantPlace, closeInto: number[
 function scheduleFricative(cursor: Cursor, place: ConsonantPlace, voiced: boolean, manner: "fricative" | "lateralFricative"): void {
   const dur = 0.13;
   const index = PLACE_INDEX[place];
+  const isGlottal = place === "glottal";
+  const pitch = cursor.lastPitch;
   at(cursor, (e) => {
+    // /h/ has no independent oral constriction (see PLACE_INDEX's comment —
+    // "manner carried entirely by the glottis"), so unlike every other
+    // fricative it shouldn't be rendered as tract-silenced + external noise
+    // only. That's exactly why it read as generic "static" instead of
+    // breathy: real /h/ IS the model's own aspiration term (intensity *
+    // (1-sqrt(tenseness)) * noise, in Glottis.runStep) resonating through
+    // whatever tract shape is already there — driving that directly, tract
+    // shape untouched, is what makes it sound like breath instead of hiss.
+    if (isGlottal) {
+      e.Glottis.isTouched = true;
+      e.Glottis.UIFrequency = pitch;
+      e.Glottis.UITenseness = 0.05;
+      return;
+    }
     // The tract is silenced here regardless of voicing, full stop — not
     // just quieted. Voiceless s/f sounded "perfect" precisely because the
     // tract contributes zero output when unexcited (intensity=0), so the
@@ -457,6 +475,7 @@ function scheduleFricative(cursor: Cursor, place: ConsonantPlace, voiced: boolea
   cursor.noiseEvents.push({ atOffset: cursor.time, dur, place, voiced, kind: "fricative" });
   void manner;
   cursor.time += dur;
+  if (isGlottal) cursor.lastPitch = pitch;
 }
 
 /**
@@ -543,19 +562,31 @@ function scheduleTapOrTrill(cursor: Cursor, place: ConsonantPlace, manner: Conso
   // never registered as a distinct contact, just a blip inside whatever
   // came next.
   const closeDur = 0.018;
-  const openDur = 0.045;
+  // A real alveolar trill vibrates at ~25-30Hz (~35-40ms per contact-to-
+  // contact cycle) — trills need a much shorter reopen than a tap's single,
+  // deliberate contact, or the roll drags. Left at the tap's 0.045 for both,
+  // this rolled noticeably slower than a real trill; only trills speed up.
+  const openDur = manner === "trill" ? 0.025 : 0.045;
   const index = PLACE_INDEX[place];
   at(cursor, (e) => {
     e.Tract.movementSpeed = 55; // real trills involve unusually fast articulator movement, faster still than the already-raised baseline (see pink-trombone-engine.ts)
     e.Glottis.UITenseness = NEUTRAL_TENSENESS;
   });
   for (let i = 0; i < pulses; i++) {
+    const isLastPulse = i === pulses - 1;
+    // Every pulse but the last opens toward REST_SHAPE, not `closeInto` — a
+    // trill needs real room to open between taps to actually roll. When the
+    // next unit in a cluster is another consonant (e.g. a following stop),
+    // `closeInto` is already a near-total closure (see anticipatedShape), so
+    // opening "toward" it left the tract with nowhere to go — the trill read
+    // as swallowed/cut off instead of rolling. Only the LAST pulse hands off
+    // into `closeInto`, same as a stop's own release into what follows.
     at(cursor, (e) => {
       e.Glottis.isTouched = true;
-      setShape(e, constrict(closeInto, index, 2, 0.1));
+      setShape(e, constrict(REST_SHAPE, index, 2, 0.1));
     });
     cursor.time += closeDur;
-    at(cursor, (e) => setShape(e, closeInto));
+    at(cursor, (e) => setShape(e, isLastPulse ? closeInto : REST_SHAPE));
     cursor.time += openDur;
   }
   at(cursor, (e) => {

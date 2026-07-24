@@ -19,7 +19,13 @@ import { runGestures } from "./pink-trombone-engine";
 
 const FRICATIVE_HZ: Record<ConsonantPlace, number> = {
   bilabial: 1000,
-  labiodental: 7600,
+  // Was 7600 — that high and this narrow (non-sibilant Q, see
+  // playFricativeNoise) read as a thin high-pitched whistle rather than a
+  // diffuse "fffff" hiss. Real /f/ noise is weak and spread out with no
+  // strong peak in the first place; 5000 keeps it a touch brighter than
+  // dental (they're famously hard to tell apart acoustically anyway)
+  // without landing in whistle territory.
+  labiodental: 5000,
   dental: 4800,
   alveolar: 6500,
   postalveolar: 3000,
@@ -28,7 +34,12 @@ const FRICATIVE_HZ: Record<ConsonantPlace, number> = {
   velar: 2000,
   uvular: 1300,
   pharyngeal: 1000,
-  glottal: 4000,
+  // Was 4000 — /h/ now gets its primary "breathy" texture from the tract's
+  // own aspiration term (see scheduleFricative's isGlottal branch); this
+  // external layer is just a quiet supplementary texture underneath, so it's
+  // pulled down and warmed up (see the reduced peak in playFricativeNoise
+  // too) instead of being the dominant bright "static" layer it used to be.
+  glottal: 2400,
 };
 
 /** Where a voiceless stop's release burst is spectrally centered — same table shape as the old formant-synth engine's, reintroduced because the tract model's own transient turned out too weak to tell places apart by ear. */
@@ -94,6 +105,14 @@ function playNoiseBurst(ctx: AudioContext, dest: AudioNode, centerHz: number, q:
   ceiling.Q.value = 0.5;
 
   const env = ctx.createGain();
+  // Without this, the gain param has no automation before `startAt` and
+  // holds its default value (1, i.e. full volume) for the entire pre-roll —
+  // verified by rendering this exact chain offline: the pre-roll played at
+  // gain 1 (louder than even the loudest peak here, 0.75), then hard-cut to
+  // 0 right at the intended attack instead of fading in. That's an audible
+  // burst-then-click before every fricative/stop/click's real onset, which
+  // is exactly what read as hissy/buzzy and smeared clusters together.
+  env.gain.setValueAtTime(0, noiseStart);
   envelope(env, startAt, dur, peak);
   noise.connect(bp1);
   bp1.connect(bp2);
@@ -115,7 +134,10 @@ function playNoiseBurst(ctx: AudioContext, dest: AudioNode, centerHz: number, q:
 function playFricativeNoise(ctx: AudioContext, dest: AudioNode, place: ConsonantPlace, startAt: number, dur: number): void {
   const isSibilant = SIBILANT_PLACES.has(place);
   const q = isSibilant ? 2.6 : 0.6;
-  const peak = isSibilant ? 0.42 : 0.22;
+  // Glottal gets a quieter external layer than other non-sibilants — it's a
+  // supplement to the tract-driven aspiration now (scheduleFricative), not
+  // the whole sound, so it shouldn't compete with that for presence.
+  const peak = isSibilant ? 0.42 : place === "glottal" ? 0.12 : 0.22;
   playNoiseBurst(ctx, dest, FRICATIVE_HZ[place], q, startAt, dur, peak);
 }
 
@@ -148,6 +170,18 @@ function playStopBurst(ctx: AudioContext, dest: AudioNode, place: ConsonantPlace
   playNoiseBurst(ctx, dest, BURST_HZ[place], 1.6, startAt, dur, 0.55);
 }
 
+/**
+ * Ejectives previously reused playStopBurst verbatim, which fixed an old
+ * "quieter than /p/" bug but at the cost of making ejectives and plain stops
+ * sound identical — same burst, same everything. Real ejectives build oral
+ * pressure behind a glottalic closure on top of the oral one, so the release
+ * is a harder, brighter, more percussive transient than a pulmonic stop's:
+ * higher-Q (sharper focus), shifted up in frequency, louder, and shorter.
+ */
+function playEjectiveBurst(ctx: AudioContext, dest: AudioNode, place: ConsonantPlace, startAt: number, dur: number): void {
+  playNoiseBurst(ctx, dest, BURST_HZ[place] * 1.35, 2.4, startAt, dur * 0.5, 0.95);
+}
+
 function playClickNoise(ctx: AudioContext, dest: AudioNode, startAt: number): void {
   playNoiseBurst(ctx, dest, 4500, 0.6, startAt, 0.008, 0.75);
 }
@@ -177,6 +211,7 @@ async function play(units: Array<ConsonantPhoneme | VowelPhoneme>): Promise<void
   for (const event of noiseEvents) {
     if (event.kind === "click") playClickNoise(ctx, dest, startAt + event.atOffset);
     else if (event.kind === "stopBurst") playStopBurst(ctx, dest, event.place, startAt + event.atOffset, event.dur);
+    else if (event.kind === "ejectiveBurst") playEjectiveBurst(ctx, dest, event.place, startAt + event.atOffset, event.dur);
     else {
       playFricativeNoise(ctx, dest, event.place, startAt + event.atOffset, event.dur);
       if (event.voiced) playVoiceHum(ctx, dest, startAt + event.atOffset, event.dur);
