@@ -4,7 +4,9 @@ import { useMemo, useState } from "react";
 import { useMutation } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import { formatPartOfSpeech } from "@/lib/lexicon/format";
+import { playRoot } from "@/lib/lexicon/audio";
 import type { LexiconItemData, PartOfSpeech } from "@/lib/lexicon/engine";
+import type { PhonologyData } from "@/lib/phonology/engine";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
 
 type ItemRow = Doc<"lexiconItems">;
@@ -19,10 +21,12 @@ export function RootsTable({
   languageId,
   items,
   stageLocked,
+  phonology,
 }: {
   languageId: Id<"languages">;
   items: ItemRow[];
   stageLocked: boolean;
+  phonology: PhonologyData;
 }) {
   const [search, setSearch] = useState("");
   const [domainFilter, setDomainFilter] = useState<string>("all");
@@ -131,7 +135,18 @@ export function RootsTable({
               return (
                 <tr key={row._id} className="border-t border-border hover:bg-surface-hover">
                   <td className="px-2 py-1.5 font-mono text-text">
-                    {data.phonologicalForm}
+                    <span className="inline-flex items-center gap-1">
+                      <button
+                        type="button"
+                        disabled={row.staleSince != null}
+                        onClick={() => playRoot(data.phonemeIds, phonology)}
+                        title={row.staleSince != null ? "Regenerate to hear pronunciation" : `Play /${data.phonologicalForm}/`}
+                        className="hover:text-accent disabled:cursor-not-allowed disabled:opacity-30"
+                      >
+                        <span aria-hidden>🔊</span>
+                      </button>
+                      {data.phonologicalForm}
+                    </span>
                     {row.staleSince != null && (
                       <span className="ml-1.5 rounded bg-amber-500/20 px-1 text-[10px] text-amber-600">stale</span>
                     )}

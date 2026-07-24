@@ -171,14 +171,14 @@ export function LexiconPage({ languageId }: { languageId: Id<"languages"> }) {
                 </button>
               </div>
 
-              <LivePreviewPanel preview={preview} isDirty={isDirty} />
+              <LivePreviewPanel preview={preview} isDirty={isDirty} phonology={phonologyData} />
 
               <DomainWeightControls params={draftWeights} onChange={setDraftWeights} />
 
               {items === undefined ? (
                 <p className="text-sm text-text-muted">Loading roots...</p>
               ) : (
-                <RootsTable languageId={languageId} items={items} stageLocked={stageLocked} />
+                <RootsTable languageId={languageId} items={items} stageLocked={stageLocked} phonology={phonologyData} />
               )}
             </div>
 
