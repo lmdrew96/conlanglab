@@ -54,38 +54,73 @@ function constrict(base: number[], center: number, width: number, minDiameter: n
 
 const LIP_INDEX = 41;
 
-function rounded(base: number[]): number[] {
-  return constrict(base, LIP_INDEX, 3, 0.5);
+/**
+ * Front and back rounded vowels need genuinely different rounding strengths
+ * — measured via a real Kelly-Lochbaum impulse-response probe of this exact
+ * model, one shared constant can't serve both. The original (3, 0.5) dropped
+ * F2 by ~635Hz vs a vowel's unrounded counterpart, which is roughly 2x a
+ * realistic front-rounded drop (200-400Hz) — /y/ and /ø/ ended up with
+ * near-identical F2 despite being different heights. But softening it
+ * uniformly broke the BACK rounded vowels, which lean on that same lip
+ * constriction to stay properly close: /u/'s F1 jumped from 484 to 571 (right
+ * where the STRUT/"uh" vowel sits) once the constriction weakened, which is
+ * exactly why it read as "uh" instead of "oo." (2, 0.7) measures right for
+ * front rounding; back rounding needs to stay strong — (5, 0.3) puts /u/ at
+ * F1≈323/F2≈969, close to a real /u/'s ~300-350/~800-900.
+ */
+function frontRounded(base: number[]): number[] {
+  return constrict(base, LIP_INDEX, 2, 0.7);
+}
+function backRounded(base: number[]): number[] {
+  return constrict(base, LIP_INDEX, 5, 0.3);
 }
 
 interface VowelArticulation {
   center: number;
   width: number;
   diameter: number;
-  rounded?: boolean;
+  rounded?: "front" | "back";
 }
 
+/**
+ * a/ɑ (and, transitively, ə) used to be acoustically almost indistinguishable
+ * — measured via a real impulse-response probe of this exact tube model:
+ * REST_SHAPE is already 1.5 at these indices, so the old shallow targets
+ * (diameter 1.3) were only ~13% narrower than ambient — barely a
+ * constriction at all, so moving `center` had almost no acoustic effect
+ * (front/back F2 gap was ~20-30Hz, well below what's perceptible). Widening
+ * `width` turned out to be the real lever for front/back contrast at low
+ * vowel heights (not `diameter`, which mainly controls height/F1) — a wide,
+ * shallow taper spans enough of the tract to create real front/back cavity
+ * asymmetry, matching how a low vowel's tongue mass genuinely spans a much
+ * bigger stretch of the tract than a high vowel's localized constriction
+ * (the file header's Story 2005 reference is exactly this). These values
+ * measured a 258Hz front/back F2 gap while keeping F1 at/above ɛ's, i.e.
+ * correctly reading as more open than ɛ, not less.
+ */
 const VOWEL_ARTICULATION: Record<string, VowelArticulation> = {
   i: { center: 30, width: 6, diameter: 0.35 },
   e: { center: 28, width: 7, diameter: 0.75 },
   ɛ: { center: 26, width: 7, diameter: 1.05 },
-  a: { center: 20, width: 8, diameter: 1.3 },
-  ɑ: { center: 14, width: 7, diameter: 1.3 },
-  ɔ: { center: 16, width: 7, diameter: 0.9, rounded: true },
-  o: { center: 15, width: 6, diameter: 0.6, rounded: true },
-  u: { center: 14, width: 6, diameter: 0.35, rounded: true },
+  a: { center: 26, width: 14, diameter: 1.1 },
+  ɑ: { center: 10, width: 14, diameter: 1.1 },
+  ɔ: { center: 16, width: 7, diameter: 0.9, rounded: "back" },
+  o: { center: 15, width: 6, diameter: 0.6, rounded: "back" },
+  u: { center: 14, width: 6, diameter: 0.35, rounded: "back" },
   ə: { center: 20, width: 10, diameter: 1.4 },
   ɪ: { center: 29, width: 6, diameter: 0.55 },
-  ʊ: { center: 15, width: 6, diameter: 0.55, rounded: true },
-  y: { center: 30, width: 6, diameter: 0.35, rounded: true },
-  ø: { center: 28, width: 7, diameter: 0.75, rounded: true },
+  ʊ: { center: 15, width: 6, diameter: 0.55, rounded: "back" },
+  y: { center: 30, width: 6, diameter: 0.35, rounded: "front" },
+  ø: { center: 28, width: 7, diameter: 0.75, rounded: "front" },
 };
 
 export function vowelShape(ipa: string): number[] {
   const art = VOWEL_ARTICULATION[ipa];
   if (!art) return REST_SHAPE.slice();
   const d = constrict(REST_SHAPE, art.center, art.width, art.diameter);
-  return art.rounded ? rounded(d) : d;
+  if (art.rounded === "front") return frontRounded(d);
+  if (art.rounded === "back") return backRounded(d);
+  return d;
 }
 
 /** Where each place of articulation constricts the tract (throat=0 to lips=43). */
