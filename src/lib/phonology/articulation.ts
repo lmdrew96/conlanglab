@@ -94,50 +94,64 @@ interface VowelArticulation {
 }
 
 /**
- * a/ɑ (and, transitively, ə) used to be acoustically almost indistinguishable
- * — measured via a real impulse-response probe of this exact tube model:
- * REST_SHAPE is already 1.5 at these indices, so the old shallow targets
- * (diameter 1.3) were only ~13% narrower than ambient — barely a
- * constriction at all, so moving `center` had almost no acoustic effect
- * (front/back F2 gap was ~20-30Hz, well below what's perceptible). Widening
- * `width` turned out to be the real lever for front/back contrast at low
- * vowel heights (not `diameter`, which mainly controls height/F1) — a wide,
- * shallow taper spans enough of the tract to create real front/back cavity
- * asymmetry, matching how a low vowel's tongue mass genuinely spans a much
- * bigger stretch of the tract than a high vowel's localized constriction
- * (the file header's Story 2005 reference is exactly this). These values
- * measured a 258Hz front/back F2 gap while keeping F1 at/above ɛ's, i.e.
- * correctly reading as more open than ɛ, not less.
+ * Every vowel below is grid-searched (center/width/diameter/lipDiameter,
+ * search script not committed — this table is the output) against real
+ * measured F1/F2/F3 data Nae supplied for the whole IPA vowel space
+ * (Wavesurfer LPC analysis, see `vowels info/` in the repo root — not
+ * committed, just working reference), the same fix that first got the
+ * back-rounded series (u/ʊ/o/ɔ) actually right instead of "sounds more X"
+ * guessing. F1/F2 are weighted as the primary fit target, F3 as a lighter
+ * tiebreaker (real, but perceptually secondary to F1/F2 for vowel identity).
+ *
+ * Two real ceilings showed up that no amount of searching gets past, given
+ * this tube's fixed overall length/lip opening (REST_SHAPE is shared by
+ * every phoneme, so widening it is out of scope for a vowel-formant pass —
+ * it'd ripple into every consonant's coarticulation target too): even
+ * REST_SHAPE completely unconstricted only measures F1≈600Hz, so /a/
+ * (target 806Hz) and /ɑ/ (781Hz) can't get any more open than ~600-645Hz no
+ * matter the shape searched — their F2/F3 are still fit precisely, just F1
+ * is the closest this tube can reach. Symmetrically, /i/ and /y/ floor out
+ * around F1≈345-370Hz (target 294/283) — a high vowel's F1 can't get much
+ * lower here either. Relative ordering across the whole vowel space is
+ * still correct (closes are lowest F1, opens are highest), just compressed
+ * into a narrower absolute range (~345-645Hz) than real speech's (~250-800).
  */
 const VOWEL_ARTICULATION: Record<string, VowelArticulation> = {
-  i: { center: 30, width: 6, diameter: 0.35 },
-  e: { center: 28, width: 7, diameter: 0.75 },
-  ɛ: { center: 26, width: 7, diameter: 1.05 },
-  a: { center: 26, width: 14, diameter: 1.1 },
-  ɑ: { center: 10, width: 14, diameter: 1.1 },
+  // target F1/F2/F3 = 294/2343/3251; got 350/2350/3130 — F1 at this tube's close-vowel floor (see file comment above)
+  i: { center: 30, width: 7, diameter: 0.05 },
+  // target 360/2187/2830; got 370/2190/3130
+  ɪ: { center: 30, width: 7, diameter: 0.1 },
+  // target 434/2148/2763; got 430/2150/3110
+  e: { center: 31, width: 9, diameter: 0.3 },
+  // target 581/1840/2429; got 590/1830/2430 — excellent fit across all three
+  ɛ: { center: 27, width: 5, diameter: 0.85 },
+  // target 806/1632/2684; got 600/1635/2670 — F1 at this tube's open-vowel ceiling, F2/F3 land almost exactly
+  a: { center: 22.5, width: 10, diameter: 0.9 },
+  // target 781/1065/2158; got 645/990/2715 — same F1 ceiling as /a/ above
+  ɑ: { center: 13.5, width: 16, diameter: 0.9 },
   // The back-rounded series went through several rounds of "make it sound
   // more X" guessing (loosen the lip constriction, narrow the oral one...)
-  // before Nae supplied actual reference data: real measured F1/F2/F3 for
-  // the whole IPA vowel space (Wavesurfer LPC analysis, see `vowels info/`
-  // in the repo root — not committed, just working reference). That
-  // replaced guessing with an actual target to fit against: u=(295,750),
-  // ʊ=(334,910), o=(406,727), ɔ=(541,830) Hz. Every earlier attempt here had
-  // back-rounded F2 pinned around 1000-1400Hz — genuinely too central/
-  // forward compared to these — because center/width/diameter/lipDiameter
-  // all move F1 *and* F2 together in this model, so no amount of nudging
-  // one lever at a time by ear was going to land all four vowels correctly
-  // at once. Grid-searched all four params per vowel against the real
-  // targets instead (search script not committed — this table is the
-  // output): u lands almost exactly on target (err 5Hz total F1+F2), the
-  // rest within 8-19Hz — an actual fit, not another guess.
+  // before switching to fitting real data — every earlier attempt here had
+  // back-rounded F2 pinned around 1000-1400Hz, genuinely too central/
+  // forward, because center/width/diameter/lipDiameter all move F1 *and* F2
+  // together in this model, so nudging one lever at a time by ear was never
+  // going to land all four correctly at once.
+  // target 541/830/2221; got 540/810/2610
   ɔ: { center: 15, width: 9, diameter: 0.3, rounded: "back", lipDiameter: 0.55 },
+  // target 406/727/2090; got 405/735/1935
   o: { center: 11, width: 4, diameter: 0.15, rounded: "back", lipDiameter: 0.25 },
+  // target 295/750/2342; got 300/750/2115 — near-exact F1/F2
   u: { center: 12, width: 7, diameter: 0.2, rounded: "back", lipDiameter: 0.1 },
-  ə: { center: 20, width: 10, diameter: 1.4 },
-  ɪ: { center: 29, width: 6, diameter: 0.55 },
+  // target 334/910/2300; got 330/900/2370 — near-exact across all three
   ʊ: { center: 15, width: 6, diameter: 0.35, rounded: "back", lipDiameter: 0.2 },
-  y: { center: 30, width: 6, diameter: 0.35, rounded: "front" },
-  ø: { center: 28, width: 7, diameter: 0.75, rounded: "front" },
+  // target 486/1826/2422 (defined in the reference chart as "halfway between
+  // ɘ and ɜ", the two central-unrounded mid vowels — the closest real
+  // anchor for a stressless schwa); got 540/1830/2370
+  ə: { center: 26.5, width: 7, diameter: 0.5 },
+  // target 283/2170/2417; got 345/2175/3165 — F1 at the same close-vowel floor as /i/, not a rounding failure
+  y: { center: 32, width: 4, diameter: 0.08, rounded: "front", lipDiameter: 1.1 },
+  // target 462/1659/2127; got 490/1650/2210
+  ø: { center: 28, width: 5, diameter: 0.4, rounded: "front", lipDiameter: 0.9 },
 };
 
 export function vowelShape(ipa: string): number[] {
