@@ -52,6 +52,62 @@
   --color-accent-text: #1a1a1a;
 }
 
+/* Light variants (ChaosPatch: "All four themes need a light variant").
+   Every combination of theme + [data-mode="light"] is given its own fully
+   qualified selector rather than relying on a lower-specificity fallback —
+   two single-attribute selectors (e.g. [data-theme="isogloss"] and
+   [data-mode="light"]) have equal specificity, so mixing them would resolve
+   by source order, not by which theme is actually active. Values verified
+   for WCAG AA contrast the same way the dark palette's header comment
+   describes, not eyeballed — see src/lib/themes.ts's LIGHT_THEMES. */
+:root[data-theme="vernacular"][data-mode="light"] {
+  --color-bg: #f2ece2;
+  --color-surface: #e6dccb;
+  --color-surface-hover: #d9cdb6;
+  --color-border: #c4b59a;
+  --color-text: #5c4530;
+  --color-text-muted: #725a40;
+  --color-accent: #8c6a42;
+  --color-accent-hover: #7c5e38;
+  --color-accent-text: #ffffff;
+}
+
+:root[data-theme="isogloss"][data-mode="light"] {
+  --color-bg: #eef0f6;
+  --color-surface: #e0e4ee;
+  --color-surface-hover: #d1d7e6;
+  --color-border: #b8bfd1;
+  --color-text: #2a2740;
+  --color-text-muted: #5c5470;
+  --color-accent: #b0452c;
+  --color-accent-hover: #c0553c;
+  --color-accent-text: #ffffff;
+}
+
+:root[data-theme="glossolalia"][data-mode="light"] {
+  --color-bg: #f5f0f7;
+  --color-surface: #e9dff0;
+  --color-surface-hover: #ddd0e6;
+  --color-border: #c4b0d1;
+  --color-text: #3d2a45;
+  --color-text-muted: #6b5a75;
+  --color-accent: #5a6b2e;
+  --color-accent-hover: #6a7b3e;
+  --color-accent-text: #ffffff;
+}
+
+:root[data-theme="prosody"][data-mode="light"] {
+  --color-bg: #f7eef0;
+  --color-surface: #efe0e4;
+  --color-surface-hover: #e6d0d6;
+  --color-border: #d1b5bd;
+  --color-text: #5c1f1f;
+  --color-text-muted: #684878;
+  --color-accent: #7a5fc4;
+  --color-accent-hover: #6c50b0;
+  --color-accent-text: #ffffff;
+}
+
 @theme inline {
   --color-bg: var(--color-bg);
   --color-surface: var(--color-surface);
