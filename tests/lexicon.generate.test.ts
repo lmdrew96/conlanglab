@@ -129,6 +129,44 @@ describe("generateLexicon determinism", () => {
     expect(survived).toEqual(lockedItem);
   });
 
+  it("skews Tier A/B core concepts shorter than Tier D domain vocabulary", () => {
+    // "i" (grammar -> Tier A) and "ear" (body -> Tier B) should come out
+    // consistently 1-2 syllables; flexible-domain roots (always Tier D)
+    // should come out at the current unrestricted 1-3 syllable range.
+    const byId = new Map(generateInitial(7, phonology).items.map((i) => [i.id, i]));
+    const syllableCount = (form: string) => form.split(".").length;
+
+    const tierA = byId.get("i")!;
+    expect(syllableCount(tierA.phonologicalForm)).toBe(1);
+
+    const tierB = byId.get("ear")!;
+    expect(syllableCount(tierB.phonologicalForm)).toBeLessThanOrEqual(2);
+  });
+
+  it("suppresses onset/coda clusters for Tier A core concepts across many seeds", () => {
+    const phonemesById = new Map([...phonology.consonants, ...phonology.vowels].map((p) => [p.id, p]));
+    const isVowelId = (id: string) => "height" in phonemesById.get(id)!.features;
+
+    function hasConsonantCluster(phonemeIds: string[]): boolean {
+      let consonantRun = 0;
+      for (const id of phonemeIds) {
+        if (isVowelId(id)) {
+          consonantRun = 0;
+          continue;
+        }
+        consonantRun++;
+        if (consonantRun > 1) return true;
+      }
+      return false;
+    }
+
+    for (let seed = 0; seed < 15; seed++) {
+      const { items } = generateInitial(seed, phonology);
+      const tierAItem = items.find((i) => i.id === "i")!;
+      expect(hasConsonantCluster(tierAItem.phonemeIds)).toBe(false);
+    }
+  });
+
   it("regenerateSingleItem only changes the targeted item and its dependent compounds", () => {
     const initial = generateInitial(7, phonology);
     const target = initial.items.find((i) => i.kind === "core" && i.id === "hand")!;

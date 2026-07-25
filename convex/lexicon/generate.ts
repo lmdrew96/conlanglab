@@ -13,6 +13,7 @@ import type {
   CompoundConcept,
   ConceptKind,
   FlexibleDomain,
+  FrequencyTier,
   LexiconItemData,
   LexiconParams,
   LexiconStageData,
@@ -33,13 +34,17 @@ interface ConceptMeta {
   domain: string;
   gloss: string;
   kind: ConceptKind;
+  frequencyTier: FrequencyTier;
 }
+
+/** Flexible-domain roots are always flavor/rare vocabulary (Section 6.2) — Tier D by definition, no per-item tagging needed. */
+const FLEXIBLE_FREQUENCY_TIER: FrequencyTier = "D";
 
 function lookupConcept(id: string): ConceptMeta | null {
   const core = CORE_MAP.get(id);
-  if (core) return { pos: core.pos, domain: core.category, gloss: core.gloss, kind: "core" };
+  if (core) return { pos: core.pos, domain: core.category, gloss: core.gloss, kind: "core", frequencyTier: core.frequencyTier };
   const flex = FLEXIBLE_MAP.get(id);
-  if (flex) return { pos: flex.pos, domain: flex.domain, gloss: flex.gloss, kind: "flexible" };
+  if (flex) return { pos: flex.pos, domain: flex.domain, gloss: flex.gloss, kind: "flexible", frequencyTier: FLEXIBLE_FREQUENCY_TIER };
   return null;
 }
 
@@ -81,8 +86,74 @@ function pickStressIndex(syllables: Array<Array<ConsonantPhoneme | VowelPhoneme>
   }
 }
 
-function pickSyllableCount(rng: Rng): number {
-  return rng.weightedPick([1, 2, 3], (n) => (n === 1 ? 5 : n === 2 ? 3 : 1));
+/**
+ * Target syllable count by frequency tier (Frequency-weighted root
+ * complexity patch) — Tier A/B skew toward the short end matching real
+ * languages' high-frequency vocabulary (Zipf's Law of Abbreviation); C keeps
+ * the original global weights; D is deliberately left identical to C rather
+ * than widened, since nothing in the source spec required domain vocabulary
+ * to skew longer than the current status quo.
+ */
+const SYLLABLE_COUNT_WEIGHTS: Record<FrequencyTier, Array<{ count: number; weight: number }>> = {
+  A: [{ count: 1, weight: 1 }],
+  B: [
+    { count: 1, weight: 3 },
+    { count: 2, weight: 1 },
+  ],
+  C: [
+    { count: 1, weight: 5 },
+    { count: 2, weight: 3 },
+    { count: 3, weight: 1 },
+  ],
+  D: [
+    { count: 1, weight: 5 },
+    { count: 2, weight: 3 },
+    { count: 3, weight: 1 },
+  ],
+};
+
+function pickSyllableCount(rng: Rng, tier: FrequencyTier): number {
+  return rng.weightedPick(SYLLABLE_COUNT_WEIGHTS[tier], (o) => o.weight).count;
+}
+
+/** Cluster tolerance by frequency tier — "none" rerolls until a clusterless syllable is found (or the retry budget runs out); "rare" occasionally lets a cluster stand; "unrestricted" is the current, un-suppressed behavior. */
+const CLUSTER_POLICY: Record<FrequencyTier, "none" | "rare" | "unrestricted"> = {
+  A: "none",
+  B: "rare",
+  C: "unrestricted",
+  D: "unrestricted",
+};
+
+/** Probability a Tier B cluster is allowed to stand once drawn, rather than rerolled — "rare", not "never" (see CLUSTER_POLICY). */
+const RARE_CLUSTER_KEEP_CHANCE = 0.15;
+
+/** Bounded retry cap for cluster suppression — mirrors MAX_UNIQUE_ATTEMPTS's graceful-degradation pattern (falls back to whatever's drawn if the phonology's templates can't produce a clusterless option in time), scoped separately since this retries per-syllable rather than per-root. */
+const CLUSTER_SUPPRESSION_MAX_ATTEMPTS = 10;
+
+function hasConsonantCluster(syllable: Array<ConsonantPhoneme | VowelPhoneme>): boolean {
+  const vIndex = syllable.findIndex(isVowel);
+  const onsetSize = vIndex;
+  const codaSize = syllable.length - vIndex - 1;
+  return onsetSize > 1 || codaSize > 1;
+}
+
+/** Reuses Phonology's `buildSyllable` verbatim (never forks/overrides its cluster logic) and only filters/retries within its existing output — Phonology stays the single source of truth for what clusters *can* exist. */
+function buildSyllableForTier(
+  rng: Rng,
+  phonology: PhonologyData,
+  tier: FrequencyTier,
+): Array<ConsonantPhoneme | VowelPhoneme> {
+  const policy = CLUSTER_POLICY[tier];
+  if (policy === "unrestricted") return buildSyllable(rng, phonology);
+
+  let syllable = buildSyllable(rng, phonology);
+  let attempts = 0;
+  while (hasConsonantCluster(syllable) && attempts < CLUSTER_SUPPRESSION_MAX_ATTEMPTS) {
+    if (policy === "rare" && rng.chance(RARE_CLUSTER_KEEP_CHANCE)) break;
+    syllable = buildSyllable(rng, phonology);
+    attempts++;
+  }
+  return syllable;
 }
 
 /** Absolute index within `syllables.flat()` of the given syllable's own vowel — undefined if that syllable somehow has none (shouldn't happen for a well-formed syllable, but buildSyllable's contract isn't re-validated here). */
@@ -98,9 +169,10 @@ function buildRoot(
   rng: Rng,
   phonology: PhonologyData,
   syllableCount: number,
+  tier: FrequencyTier,
 ): { phonemeIds: string[]; phonologicalForm: string; stressedPhonemeIndex?: number } {
   const syllables: Array<Array<ConsonantPhoneme | VowelPhoneme>> = [];
-  for (let i = 0; i < syllableCount; i++) syllables.push(buildSyllable(rng, phonology));
+  for (let i = 0; i < syllableCount; i++) syllables.push(buildSyllableForTier(rng, phonology, tier));
 
   const stressIndex = pickStressIndex(syllables, phonology.stress.pattern);
   const rendered = syllables
@@ -123,10 +195,10 @@ function buildRootItem(
   usedForms: Set<string>,
   seed: Seed,
 ): LexiconItemData {
-  let built = buildRoot(itemRng, phonology, pickSyllableCount(itemRng));
+  let built = buildRoot(itemRng, phonology, pickSyllableCount(itemRng, meta.frequencyTier), meta.frequencyTier);
   let attempts = 0;
   while (usedForms.has(built.phonologicalForm) && attempts < MAX_UNIQUE_ATTEMPTS) {
-    built = buildRoot(itemRng, phonology, pickSyllableCount(itemRng));
+    built = buildRoot(itemRng, phonology, pickSyllableCount(itemRng, meta.frequencyTier), meta.frequencyTier);
     attempts++;
   }
   usedForms.add(built.phonologicalForm);
@@ -332,6 +404,13 @@ export function samplePreviewRoots(phonology: PhonologyData, params: LexiconPara
   return picks.map((c) => {
     const itemSeed = { base: deriveSeed(seedBase, hashString(c.id) ^ PREVIEW_SALT), variation: 0 };
     const itemRng = new Rng(deriveSeed(itemSeed.base, itemSeed.variation));
-    return buildRootItem(c.id, { pos: c.pos, domain: c.domain, gloss: c.gloss, kind: "flexible" }, itemRng, phonology, usedForms, itemSeed);
+    return buildRootItem(
+      c.id,
+      { pos: c.pos, domain: c.domain, gloss: c.gloss, kind: "flexible", frequencyTier: FLEXIBLE_FREQUENCY_TIER },
+      itemRng,
+      phonology,
+      usedForms,
+      itemSeed,
+    );
   });
 }

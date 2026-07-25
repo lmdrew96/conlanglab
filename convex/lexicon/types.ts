@@ -32,11 +32,22 @@ export const FLEXIBLE_DOMAINS: FlexibleDomain[] = [
 
 export type ConceptKind = "core" | "flexible" | "compound";
 
+/**
+ * Zipf's Law of Abbreviation tier (design doc: Frequency-weighted root
+ * complexity) — biases syllable count and cluster likelihood so high-use
+ * words (pronouns, core verbs) skew short/simple relative to rare/domain
+ * vocabulary. A = ultra-core (1 syllable, no clusters) through D = domain/rare
+ * (current unrestricted range). Only `CoreConcept` carries this — flexible
+ * and compound concepts are always treated as Tier D (see generate.ts).
+ */
+export type FrequencyTier = "A" | "B" | "C" | "D";
+
 export interface CoreConcept {
   id: string;
   gloss: string;
   pos: PartOfSpeech;
   category: string;
+  frequencyTier: FrequencyTier;
 }
 
 export interface FlexibleConcept {

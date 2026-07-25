@@ -8,12 +8,58 @@
 // COMPOUND_LIST is the curated set of non-literal/idiomatic formations
 // (Section 6.3) — each references two ids from CORE_LIST/FLEXIBLE_LIST.
 
-import type { CompoundConcept, CoreConcept, FlexibleConcept, FlexibleDomain, PartOfSpeech } from "./types";
+import type { CompoundConcept, CoreConcept, FlexibleConcept, FlexibleDomain, FrequencyTier, PartOfSpeech } from "./types";
 
 type Tuple = [id: string, gloss: string, pos: PartOfSpeech];
 
+/** Default frequency tier per CORE_LIST category (Frequency-weighted root complexity patch). */
+const CATEGORY_DEFAULT_TIER: Record<string, FrequencyTier> = {
+  grammar: "A",
+  colors_numbers: "B",
+  actions: "B",
+  body: "B",
+  qualities: "B",
+  people: "C",
+  nature: "C",
+  time: "C",
+  animals: "C",
+  emotion_abstract: "D",
+  social: "D",
+  objects: "D",
+};
+
+/** Named per-concept overrides of the category default (Frequency-weighted root complexity patch). */
+const TIER_EXCEPTIONS: Record<string, FrequencyTier> = {
+  one: "A",
+  two: "A",
+  three: "A",
+  four: "A",
+  five: "A",
+  be: "A",
+  have: "A",
+  do: "A",
+  go: "A",
+  see: "A",
+  say: "A",
+  big: "A",
+  small: "A",
+  good: "A",
+  bad: "A",
+  mother: "B",
+  father: "B",
+  child: "B",
+};
+
 function core(category: string, items: Tuple[]): CoreConcept[] {
-  return items.map(([id, gloss, pos]) => ({ id, gloss, pos, category }));
+  const defaultTier = CATEGORY_DEFAULT_TIER[category];
+  if (!defaultTier) throw new Error(`core(): no CATEGORY_DEFAULT_TIER entry for category "${category}"`);
+  return items.map(([id, gloss, pos]) => ({
+    id,
+    gloss,
+    pos,
+    category,
+    frequencyTier: TIER_EXCEPTIONS[id] ?? defaultTier,
+  }));
 }
 
 function flexible(domain: FlexibleDomain, items: Tuple[]): FlexibleConcept[] {
