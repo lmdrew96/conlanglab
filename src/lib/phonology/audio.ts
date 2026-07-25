@@ -191,8 +191,29 @@ function playEjectiveBurst(ctx: AudioContext, dest: AudioNode, place: ConsonantP
   playNoiseBurst(ctx, dest, BURST_HZ[place] * 1.35, 2.4, startAt, dur * 0.5, 0.95);
 }
 
-function playClickNoise(ctx: AudioContext, dest: AudioNode, startAt: number): void {
-  playNoiseBurst(ctx, dest, 4500, 0.6, startAt, 0.008, 0.75);
+/**
+ * Click place determines the size of the anterior cavity sealed off before
+ * release — smaller (further forward) cavities ring brighter, larger
+ * (further back) ones ring lower and more resonant. Was a single hardcoded
+ * 4500Hz for every place, so dental /ǀ/ and alveolar /ǃ/ (the only two
+ * clicks currently in the catalog) were acoustically identical.
+ */
+const CLICK_HZ: Record<ConsonantPlace, number> = {
+  bilabial: 1400,
+  labiodental: 1400,
+  dental: 6500,
+  alveolar: 2200,
+  postalveolar: 2000,
+  retroflex: 1800,
+  palatal: 1600,
+  velar: 1400,
+  uvular: 1200,
+  pharyngeal: 1000,
+  glottal: 1000,
+};
+
+function playClickNoise(ctx: AudioContext, dest: AudioNode, place: ConsonantPlace, startAt: number): void {
+  playNoiseBurst(ctx, dest, CLICK_HZ[place], 0.6, startAt, 0.008, 0.75);
 }
 
 // --- Orchestration ---
@@ -218,7 +239,7 @@ async function play(units: Array<ConsonantPhoneme | VowelPhoneme>, stressedIndex
   const dest = ctx.destination;
   const startAt = ctx.currentTime;
   for (const event of noiseEvents) {
-    if (event.kind === "click") playClickNoise(ctx, dest, startAt + event.atOffset);
+    if (event.kind === "click") playClickNoise(ctx, dest, event.place, startAt + event.atOffset);
     else if (event.kind === "stopBurst") playStopBurst(ctx, dest, event.place, startAt + event.atOffset, event.dur);
     else if (event.kind === "ejectiveBurst") playEjectiveBurst(ctx, dest, event.place, startAt + event.atOffset, event.dur);
     else {
