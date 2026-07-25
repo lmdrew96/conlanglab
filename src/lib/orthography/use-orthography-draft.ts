@@ -13,13 +13,18 @@ import type { PhonologyData } from "@/lib/phonology/engine";
  * pattern (see src/lib/syntax/use-syntax-draft.ts), not Phonology's
  * debounced one.
  */
+/** A language generated before v2's depth/ancestorScript/overflowStrategy fields existed has a committedParams object missing them entirely — backfill with DEFAULT_ORTHOGRAPHY_PARAMS (each default is a no-op value) so the picker shows the actual values a reroll/nudge would use (see mutations.ts's matching backfill) rather than undefined/NaN. */
+function withDefaults(params: OrthographyParams | null | undefined): OrthographyParams {
+  return params ? { ...DEFAULT_ORTHOGRAPHY_PARAMS, ...params } : DEFAULT_ORTHOGRAPHY_PARAMS;
+}
+
 export function useOrthographyDraft(committedParams: OrthographyParams | null | undefined, phonology: PhonologyData | null, seedBase: number) {
-  const [draftParams, setDraftParams] = useState<OrthographyParams>(committedParams ?? DEFAULT_ORTHOGRAPHY_PARAMS);
+  const [draftParams, setDraftParams] = useState<OrthographyParams>(withDefaults(committedParams));
 
   const [hasLoadedCommitted, setHasLoadedCommitted] = useState(committedParams != null);
   if (committedParams && !hasLoadedCommitted) {
     setHasLoadedCommitted(true);
-    setDraftParams(committedParams);
+    setDraftParams(withDefaults(committedParams));
   }
 
   const { style: previewStyle, glyphs: preview } = useMemo<{ style: ScriptStyle | null; glyphs: Glyph[] }>(() => {
@@ -27,7 +32,7 @@ export function useOrthographyDraft(committedParams: OrthographyParams | null | 
     return sampleGlyphs(draftParams, phonology, seedBase);
   }, [draftParams, phonology, seedBase]);
 
-  const isDirty = committedParams != null && JSON.stringify(draftParams) !== JSON.stringify(committedParams);
+  const isDirty = committedParams != null && JSON.stringify(draftParams) !== JSON.stringify(withDefaults(committedParams));
 
   return { draftParams, setDraftParams, preview, previewStyle, isDirty };
 }

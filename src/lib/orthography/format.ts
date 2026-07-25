@@ -1,4 +1,4 @@
-import type { Aesthetic, ScriptCategory } from "./engine";
+import type { AncestorScriptFamily, Aesthetic, OverflowStrategy, ScriptCategory } from "./engine";
 
 const SCRIPT_CATEGORY_LABELS: Record<ScriptCategory, string> = {
   alphabetic: "Alphabetic",
@@ -36,4 +36,48 @@ const AESTHETIC_INFO: Record<Aesthetic, string> = {
 
 export function aestheticInfo(aesthetic: Aesthetic): string {
   return AESTHETIC_INFO[aesthetic] ?? "";
+}
+
+const ANCESTOR_SCRIPT_LABELS: Record<AncestorScriptFamily, string> = {
+  latin: "Latin",
+  cyrillic: "Cyrillic",
+  arabic: "Arabic",
+  devanagari: "Devanagari",
+  hangul: "Hangul",
+};
+
+export function formatAncestorScript(ancestorScript: AncestorScriptFamily | null): string {
+  return ancestorScript ? ANCESTOR_SCRIPT_LABELS[ancestorScript] : "None";
+}
+
+const ANCESTOR_SCRIPT_INFO: Record<AncestorScriptFamily, string> = {
+  latin: "Biases toward a balanced mix of blocky and flowing strokes with moderate jitter — evokes Latin's plain, upright letterforms without copying them.",
+  cyrillic: "Similar to Latin's balance, slightly looser jitter — evokes Cyrillic's related-but-distinct letterforms.",
+  arabic: "Biases heavily toward flowing, curved strokes — evokes Arabic's cursive, joined quality without copying its letterforms.",
+  devanagari: "Biases toward flowing strokes with a moderate lean toward geometric marks — evokes Devanagari's rounded, connected quality.",
+  hangul: "Biases heavily toward blocky, geometric strokes with tight, regular jitter — evokes Hangul's featural, block-composed letterforms.",
+};
+
+export function ancestorScriptInfo(ancestorScript: AncestorScriptFamily): string {
+  return ANCESTOR_SCRIPT_INFO[ancestorScript] ?? "";
+}
+
+const OVERFLOW_STRATEGY_LABELS: Record<OverflowStrategy, string> = {
+  digraph: "Digraphs",
+  diacriticStacking: "Diacritic stacking",
+  extendedInventory: "Extended inventory",
+};
+
+export function formatOverflowStrategy(strategy: OverflowStrategy): string {
+  return OVERFLOW_STRATEGY_LABELS[strategy];
+}
+
+const OVERFLOW_STRATEGY_INFO: Record<OverflowStrategy, string> = {
+  digraph: "Sounds beyond the base letter set are spelled with a pair of existing letters, like English \"th\" or \"sh\".",
+  diacriticStacking: "Sounds beyond the base letter set reuse a letter's shape with an added mark, like Vietnamese's diacritic vowels.",
+  extendedInventory: "Every sound gets its own dedicated letter, however large the inventory gets — the Cyrillic route.",
+};
+
+export function overflowStrategyInfo(strategy: OverflowStrategy): string {
+  return OVERFLOW_STRATEGY_INFO[strategy];
 }

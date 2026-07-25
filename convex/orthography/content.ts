@@ -7,7 +7,7 @@
 import type { ConsonantManner, ConsonantPlace, VowelBackness, VowelHeight } from "../phonology/types";
 import type { ConsonantFeatures } from "../phonology/types";
 import type { AffixStrategy } from "../morphology/types";
-import type { Aesthetic, ScriptStyle, Stroke } from "./types";
+import type { AncestorScriptFamily, Aesthetic, ScriptStyle, Stroke } from "./types";
 
 /**
  * Invented = sharp corners — a deliberately alien, blocky construction.
@@ -60,6 +60,32 @@ export const STROKE_FAMILY_BY_MANNER: Record<ConsonantManner, Stroke["kind"][]> 
   implosive: ["curve", "dot"],
 };
 
+/**
+ * Manner → a fixed small tick angle, appended to every consonant glyph as a
+ * deterministic (non-random) "manner radical" — Hangul-style featural
+ * composition: same manner always produces the exact same tiny mark,
+ * regardless of which stroke kind shapeBias happened to pick for that
+ * glyph's main strokes. STROKE_FAMILY_BY_MANNER's shared pool already makes
+ * same-manner glyphs *likely* similar; this radical makes them *guaranteed*
+ * visibly related, satisfying the "phonemes sharing a feature are visibly
+ * related" contract unambiguously rather than statistically. 12 manners
+ * spaced 30° apart around the circle so no two are visually adjacent.
+ */
+export const MANNER_RADICAL_ANGLE: Record<ConsonantManner, number> = {
+  stop: 0,
+  nasal: 30,
+  fricative: 60,
+  affricate: 90,
+  approximant: 120,
+  lateralApproximant: 150,
+  trill: 180,
+  tap: 210,
+  lateralFricative: 240,
+  click: 270,
+  ejective: 300,
+  implosive: 330,
+};
+
 /** Place of articulation → horizontal grid position (0..1), ordered front-to-back along the IPA chart's own continuum so adjacent places produce visually adjacent glyphs. */
 export const ORIENTATION_BY_PLACE: Record<ConsonantPlace, number> = {
   bilabial: 0,
@@ -100,6 +126,23 @@ export const VOWEL_BACKNESS_X: Record<VowelBackness, number> = {
 
 export const VOWEL_STROKE_KINDS: Stroke["kind"][] = ["curve", "dot"];
 export const ALL_STROKE_KINDS: Stroke["kind"][] = ["line", "curve", "dot", "hook"];
+
+/**
+ * Ancestor-script structural seeding (OrthographyParams.ancestorScript):
+ * narrows/skews the seed-derived GeometryProfile's random envelope toward a
+ * real script family's overall character — shapeBias range (discrete vs
+ * flowing strokes) and a jitter multiplier — rather than reproducing any
+ * actual letterform. Still fully procedural: two languages picking the same
+ * ancestorScript land at different points within the same narrowed range,
+ * not at identical values.
+ */
+export const ANCESTOR_SCRIPT_BIAS: Record<AncestorScriptFamily, { shapeBiasRange: [number, number]; jitterMultiplier: number }> = {
+  latin: { shapeBiasRange: [0.35, 0.65], jitterMultiplier: 1 },
+  cyrillic: { shapeBiasRange: [0.3, 0.6], jitterMultiplier: 1.1 },
+  arabic: { shapeBiasRange: [0.7, 1], jitterMultiplier: 1.2 },
+  devanagari: { shapeBiasRange: [0.55, 0.85], jitterMultiplier: 1 },
+  hangul: { shapeBiasRange: [0, 0.25], jitterMultiplier: 0.6 },
+};
 
 /**
  * Which junction treatment an affix's strategy gets at render time (design

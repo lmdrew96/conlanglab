@@ -22,7 +22,14 @@ function resolveGlyph(id: string, data: OrthographyStageData, phonology: Phonolo
   if (data.mapping.kind !== "syllabic") return null;
   const [consonantPart, vowelId] = id.split("+");
   if (!vowelId) return null;
-  return buildGlyphForSyllable(consonantPart === "_" ? null : consonantPart, vowelId, phonology, data.scriptStyle, data.seed.base);
+  return buildGlyphForSyllable(
+    consonantPart === "_" ? null : consonantPart,
+    vowelId,
+    phonology,
+    data.scriptStyle,
+    data.seed.base,
+    data.params.ancestorScript,
+  );
 }
 
 /**
@@ -90,6 +97,7 @@ export function BoundaryPreviewPanel({
       <div className="flex flex-wrap items-center gap-1 rounded-md border border-border bg-bg p-3 text-text">
         {example.composed.steps.map((step, i) => {
           const glyph = resolveGlyph(step.glyphId, data, phonology);
+          const extraGlyphs = (step.extraGlyphIds ?? []).map((id) => resolveGlyph(id, data, phonology));
           return (
             <span key={`${step.glyphId}-${i}`} className="flex items-center gap-1">
               {step.junctionBefore && (
@@ -101,6 +109,15 @@ export function BoundaryPreviewPanel({
                 <GlyphSvg glyph={glyph} style={data.scriptStyle} className="h-8 w-8" />
               ) : (
                 <span className="text-xs text-text-muted">?</span>
+              )}
+              {extraGlyphs.map((extra, j) =>
+                extra ? (
+                  <GlyphSvg key={`${step.glyphId}-${i}-extra-${j}`} glyph={extra} style={data.scriptStyle} className="h-8 w-8" />
+                ) : (
+                  <span key={`${step.glyphId}-${i}-extra-${j}`} className="text-xs text-text-muted">
+                    ?
+                  </span>
+                ),
               )}
             </span>
           );

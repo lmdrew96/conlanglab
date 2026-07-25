@@ -17,15 +17,28 @@ async function getOrthographyRow(ctx: MutationCtx, languageId: Id<"languages">) 
     .unique();
 }
 
-/** Every phoneme id this language's current mapping actually references, regardless of script category. */
+/**
+ * Every phoneme id this language's current mapping actually references,
+ * regardless of script category. Includes `rules`' phonemeIds — a digraph-
+ * overflow phoneme has no entry in the base map at all (only a rule), so
+ * skipping `rules` here would silently miss a Phonology edit to that
+ * phoneme and never flag this stage stale. `rules` defaults to [] since a
+ * mapping generated before v2 added the field won't have it in storage at
+ * all (Convex stores `data` as `v.any()` — no schema migration backfills
+ * old documents), not just an empty array.
+ */
 function referencedPhonemeIds(mapping: OrthographyStageData["mapping"]): string[] {
   switch (mapping.kind) {
     case "alphabetic":
-      return Object.keys(mapping.phonemeToGlyph);
+      return [...Object.keys(mapping.phonemeToGlyph), ...(mapping.rules ?? []).map((r) => r.phonemeId)];
     case "abjad":
-      return Object.keys(mapping.consonantToGlyph);
+      return [...Object.keys(mapping.consonantToGlyph), ...(mapping.rules ?? []).map((r) => r.phonemeId)];
     case "abugida":
-      return [...Object.keys(mapping.baseConsonantToGlyph), ...Object.keys(mapping.vowelToDiacritic)];
+      return [
+        ...Object.keys(mapping.baseConsonantToGlyph),
+        ...Object.keys(mapping.vowelToDiacritic),
+        ...(mapping.rules ?? []).map((r) => r.phonemeId),
+      ];
     case "syllabic":
       return Object.keys(mapping.syllableToGlyph).flatMap((key) => {
         const [consonantId, vowelId] = key.split("+");

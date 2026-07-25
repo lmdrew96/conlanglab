@@ -11,7 +11,9 @@ import { Rng, deriveSeed } from "../lib/rng";
 import {
   AESTHETIC_STYLE_PRESETS,
   ALL_STROKE_KINDS,
+  ANCESTOR_SCRIPT_BIAS,
   BOUNDARY_TREATMENT_TABLE,
+  MANNER_RADICAL_ANGLE,
   ORIENTATION_BY_PLACE,
   SECONDARY_MARK_ANGLE,
   STROKE_FAMILY_BY_MANNER,
@@ -20,12 +22,16 @@ import {
   VOWEL_STROKE_KINDS,
 } from "./content";
 import type {
+  AncestorScriptFamily,
   Aesthetic,
   BoundaryTreatment,
   Glyph,
   GlyphKind,
+  GraphemeRule,
+  GraphemeRuleEnvironment,
   OrthographyParams,
   OrthographyStageData,
+  OverflowStrategy,
   ScriptCategory,
   ScriptStyle,
   Seed,
@@ -35,7 +41,7 @@ import type {
 import { isVowel, resolvePhonemes } from "../morphology/generate";
 import type { AssembledWord } from "../morphology/generate";
 import type { AffixStrategy, MorphologyAffixData } from "../morphology/types";
-import type { ConsonantPhoneme, PhonologyData, VowelHeight, VowelPhoneme } from "../phonology/types";
+import type { ConsonantPhoneme, PhonemeTier, PhonologyData, VowelHeight, VowelPhoneme } from "../phonology/types";
 import type { LexiconItemData } from "../lexicon/types";
 
 const DEFAULT_NUDGE_KEEP_PROBABILITY = 0.75;
@@ -117,16 +123,23 @@ interface GeometryProfile {
   shapeBias: number;
 }
 
-function buildGeometryProfile(cornerStyle: ScriptStyle["cornerStyle"], seedBase: number): GeometryProfile {
+function buildGeometryProfile(
+  cornerStyle: ScriptStyle["cornerStyle"],
+  seedBase: number,
+  ancestorScript: AncestorScriptFamily | null,
+): GeometryProfile {
   const rng = new Rng(deriveSeed(seedBase, GEOMETRY_SALT));
   const rounded = cornerStyle === "rounded";
+  const bias = ancestorScript ? ANCESTOR_SCRIPT_BIAS[ancestorScript] : null;
+  const jitterMultiplier = bias?.jitterMultiplier ?? 1;
+  const [shapeBiasMin, shapeBiasMax] = bias?.shapeBiasRange ?? [0, 1];
   return {
-    jitterSpread: rng.int(rounded ? 5 : 6, rounded ? 12 : 16),
+    jitterSpread: Math.round(rng.int(rounded ? 5 : 6, rounded ? 12 : 16) * jitterMultiplier),
     slant: rng.float() * 2 - 1,
     curveBulgeRange: rounded ? [rng.int(8, 14), rng.int(16, 28)] : [rng.int(2, 6), rng.int(7, 14)],
     hookLengthRange: rounded ? [rng.int(12, 20), rng.int(24, 42)] : [rng.int(8, 16), rng.int(18, 34)],
     dotScale: rng.float() * 0.6 + 0.8,
-    shapeBias: rng.float(),
+    shapeBias: shapeBiasMin + rng.float() * (shapeBiasMax - shapeBiasMin),
   };
 }
 
@@ -200,7 +213,27 @@ function buildStrokeOfKind(
   }
 }
 
-function buildConsonantStrokes(phoneme: ConsonantPhoneme, style: ScriptStyle, geometry: GeometryProfile, rng: Rng): Stroke[] {
+/** Overflow phonemes (diacriticStacking strategy) get one guaranteed extra mark layered on their otherwise-normal glyph, flagging them as the "added-on" tier — a fixed offset, not RNG-driven, so it never competes with the main strokes' randomization. */
+function buildOverflowMark(xBias: number, style: ScriptStyle): Stroke {
+  return { kind: "dot", center: { x: gridX(xBias, style, -10), y: style.baselineY - 2 }, radius: style.strokeWidth * 0.6 };
+}
+
+/** A fixed, non-random tick keyed only by manner (MANNER_RADICAL_ANGLE) — every consonant sharing a manner gets the exact same tiny mark below the baseline, regardless of which stroke kind shapeBias picked for its main strokes. Guarantees "same feature, visibly related" rather than leaving it to chance. */
+function buildMannerRadical(manner: ConsonantPhoneme["features"]["manner"], xBias: number, style: ScriptStyle): Stroke {
+  const angleRad = (MANNER_RADICAL_ANGLE[manner] * Math.PI) / 180;
+  const length = 6;
+  const x = gridX(xBias, style, 0);
+  const y = style.baselineY - 4;
+  return { kind: "line", from: { x, y }, to: { x: x + Math.cos(angleRad) * length, y: y + Math.sin(angleRad) * length } };
+}
+
+function buildConsonantStrokes(
+  phoneme: ConsonantPhoneme,
+  style: ScriptStyle,
+  geometry: GeometryProfile,
+  rng: Rng,
+  markOverflow = false,
+): Stroke[] {
   const family = STROKE_FAMILY_BY_MANNER[phoneme.features.manner];
   const xBias = ORIENTATION_BY_PLACE[phoneme.features.place];
   const yBand: [number, number] = [style.xHeightY, style.baselineY];
@@ -209,6 +242,7 @@ function buildConsonantStrokes(phoneme: ConsonantPhoneme, style: ScriptStyle, ge
   for (let i = 0; i < rng.int(minStrokes, maxStrokes); i++) {
     strokes.push(buildStrokeOfKind(pickStrokeKind(family, geometry, rng), xBias, yBand, style, geometry, rng));
   }
+  strokes.push(buildMannerRadical(phoneme.features.manner, xBias, style));
   if (phoneme.features.voiced) {
     strokes.push({ kind: "dot", center: { x: gridX(xBias, style, 8), y: style.xHeightY - 6 }, radius: style.strokeWidth });
   }
@@ -216,10 +250,17 @@ function buildConsonantStrokes(phoneme: ConsonantPhoneme, style: ScriptStyle, ge
     const angle = SECONDARY_MARK_ANGLE[phoneme.features.secondary];
     strokes.push({ kind: "hook", anchor: { x: gridX(xBias, style, 10), y: style.xHeightY - 4 }, angle, length: 8, curvature: 10 });
   }
+  if (markOverflow) strokes.push(buildOverflowMark(xBias, style));
   return strokes;
 }
 
-function buildVowelStrokes(phoneme: VowelPhoneme, style: ScriptStyle, geometry: GeometryProfile, rng: Rng): Stroke[] {
+function buildVowelStrokes(
+  phoneme: VowelPhoneme,
+  style: ScriptStyle,
+  geometry: GeometryProfile,
+  rng: Rng,
+  markOverflow = false,
+): Stroke[] {
   const xBias = VOWEL_BACKNESS_X[phoneme.features.backness];
   const yBand = heightBand(phoneme.features.height, style.xHeightY, style.baselineY);
   const count = Math.max(1, style.strokeCountRange[0] - 1);
@@ -230,6 +271,7 @@ function buildVowelStrokes(phoneme: VowelPhoneme, style: ScriptStyle, geometry: 
   if (phoneme.features.rounded) {
     strokes.push({ kind: "dot", center: { x: gridX(xBias, style, -8), y: style.baselineY - 4 }, radius: style.strokeWidth });
   }
+  if (markOverflow) strokes.push(buildOverflowMark(xBias, style));
   return strokes;
 }
 
@@ -298,7 +340,7 @@ export function sampleGlyphs(
 ): { style: ScriptStyle; glyphs: Glyph[] } {
   const previewSeedBase = deriveSeed(seedBase, hashString(`${params.scriptCategory}:${params.aesthetic}`) ^ PREVIEW_SALT);
   const style = buildScriptStyle(params.aesthetic, previewSeedBase);
-  const geometry = buildGeometryProfile(style.cornerStyle, previewSeedBase);
+  const geometry = buildGeometryProfile(style.cornerStyle, previewSeedBase, params.ancestorScript);
   const rng = new Rng(previewSeedBase);
   const placeholderSeed: Seed = { base: previewSeedBase, variation: 0 };
 
@@ -339,7 +381,7 @@ export function sampleGlyphs(
         const consonantId = phonology.consonants[0]?.id ?? null;
         return phonology.vowels
           .slice(0, PREVIEW_SAMPLE_COUNT)
-          .map((v) => buildGlyphForSyllable(consonantId, v.id, phonology, style, previewSeedBase));
+          .map((v) => buildGlyphForSyllable(consonantId, v.id, phonology, style, previewSeedBase, params.ancestorScript));
       }
       case "logographic": {
         return Array.from({ length: PREVIEW_SAMPLE_COUNT }, (_, i) => ({
@@ -414,11 +456,12 @@ export function buildGlyphForSyllable(
   phonology: PhonologyData,
   style: ScriptStyle,
   seedBase: number,
+  ancestorScript: AncestorScriptFamily | null,
 ): Glyph {
   const id = syllableGlyphId(consonantId, vowelId);
   const seed: Seed = { base: deriveSeed(seedBase, hashString(id)), variation: 0 };
   const rng = new Rng(deriveSeed(seed.base, seed.variation));
-  const geometry = buildGeometryProfile(style.cornerStyle, seedBase);
+  const geometry = buildGeometryProfile(style.cornerStyle, seedBase, ancestorScript);
   return {
     id,
     kind: "syllable",
@@ -436,42 +479,169 @@ interface GlyphPlan {
   build: (rng: Rng) => Stroke[];
 }
 
-function alphabeticPlan(phonology: PhonologyData, style: ScriptStyle, geometry: GeometryProfile): GlyphPlan[] {
+interface PlanResult {
+  plan: GlyphPlan[];
+  /** "always"-environment digraph rules from overflowStrategy="digraph" — phonemes here have no dedicated glyph in `plan`, only a rule. */
+  rules: GraphemeRule[];
+}
+
+// --- Overflow strategy (OrthographyParams.overflowStrategy) ---
+
+/** Base per-category glyph budget "extendedInventory" ignores — evokes a Latin-sized alphabet (~20 consonant letters, ~10 vowel letters) as the point past which a script needs an overflow strategy at all. */
+const CONSONANT_GLYPH_BUDGET = 20;
+const VOWEL_GLYPH_BUDGET = 10;
+const DIGRAPH_SALT = 0x0d19ab;
+
+const PHONEME_TIER_RANK: Record<PhonemeTier, number> = { core: 0, common: 1, marked: 2 };
+
+/** Splits by budget with core/common tier phonemes preferred in-budget and marked (rarer) ones overflowing first — matches the intuition that a script's base letters cover the common inventory and exotic additions are what run out of room. Stable within a tier (catalog order preserved). */
+function splitByBudget<T extends { tier: PhonemeTier }>(items: T[], budget: number): { inBudget: T[]; overflow: T[] } {
+  const sorted = items
+    .map((item, index) => ({ item, index }))
+    .sort((a, b) => PHONEME_TIER_RANK[a.item.tier] - PHONEME_TIER_RANK[b.item.tier] || a.index - b.index)
+    .map(({ item }) => item);
+  return { inBudget: sorted.slice(0, budget), overflow: sorted.slice(budget) };
+}
+
+/** "digraph" overflow rule: an overflow phoneme borrows a deterministic pair of DISTINCT in-budget glyph ids as its spelling, everywhere ("always") — like English "th"/"sh" reusing existing letters rather than inventing a new one. */
+function buildDigraphRules(overflow: Array<{ id: string }>, inBudgetIds: string[], seedBase: number): GraphemeRule[] {
+  if (inBudgetIds.length < 2) return [];
+  return overflow.map(({ id }) => {
+    const rng = new Rng(deriveSeed(seedBase, hashString(`digraph:${id}`) ^ DIGRAPH_SALT));
+    const first = rng.pick(inBudgetIds);
+    let second = rng.pick(inBudgetIds);
+    for (let guard = 0; second === first && guard < 10; guard++) second = rng.pick(inBudgetIds);
+    return { phonemeId: id, environment: "always" as const, glyphIds: [first, second] };
+  });
+}
+
+/**
+ * Applies overflowStrategy to one phoneme set (consonants, or vowels for
+ * alphabetic): "extendedInventory" (v1's default, and any set that fits the
+ * budget regardless of strategy) gives every phoneme a dedicated glyph plan
+ * entry, uncapped. "digraph" caps at `budget` and gives overflow phonemes a
+ * rule instead of a glyph. "diacriticStacking" also caps at `budget` but
+ * still builds a glyph for every phoneme — `buildPlan`'s `markOverflow` flag
+ * tells overflow entries to render with one extra guaranteed mark.
+ */
+function planWithOverflow<T extends { id: string; tier: PhonemeTier }>(
+  items: T[],
+  budget: number,
+  overflowStrategy: OverflowStrategy,
+  seedBase: number,
+  buildPlan: (item: T, markOverflow: boolean) => GlyphPlan,
+): PlanResult {
+  if (overflowStrategy === "extendedInventory" || items.length <= budget) {
+    return { plan: items.map((item) => buildPlan(item, false)), rules: [] };
+  }
+  const { inBudget, overflow } = splitByBudget(items, budget);
+  if (overflowStrategy === "digraph") {
+    return {
+      plan: inBudget.map((item) => buildPlan(item, false)),
+      rules: buildDigraphRules(
+        overflow,
+        inBudget.map((i) => i.id),
+        seedBase,
+      ),
+    };
+  }
+  return {
+    plan: [...inBudget.map((item) => buildPlan(item, false)), ...overflow.map((item) => buildPlan(item, true))],
+    rules: [],
+  };
+}
+
+// --- Orthographic depth (OrthographyParams.orthographicDepth) ---
+
+const DEPTH_SALT = 0x0d3974;
+const DEPTH_ENVIRONMENTS: Exclude<GraphemeRuleEnvironment, "always">[] = ["wordInitial", "wordMedial", "wordFinal"];
+
+/**
+ * depth 0 = pure 1:1 mapping (today's v1 behavior, unchanged). Higher depth
+ * gives a random subset of otherwise-regular phonemes (proportional to
+ * depth, up to ~30% at depth 1) a positional irregularity: in one
+ * environment, that phoneme borrows a DIFFERENT phoneme's existing glyph
+ * instead of its own — a "homograph" pattern (English's inconsistent
+ * digraphs/silent letters, Spanish's near-total absence of this). Only
+ * phonemes that already have a dedicated glyph are eligible — overflow
+ * phonemes get their irregularity from overflowStrategy instead, never
+ * both (the two mechanisms are kept disjoint by construction).
+ */
+function buildDepthRules(candidateIds: string[], depth: number, seedBase: number): GraphemeRule[] {
+  if (depth <= 0 || candidateIds.length < 2) return [];
+  const rng = new Rng(deriveSeed(seedBase, DEPTH_SALT));
+  const count = Math.round(depth * 0.3 * candidateIds.length);
+  const chosen = rng.shuffle(candidateIds).slice(0, count);
+  return chosen.map((phonemeId) => {
+    const environment = rng.pick(DEPTH_ENVIRONMENTS);
+    const others = candidateIds.filter((id) => id !== phonemeId);
+    return { phonemeId, environment, glyphIds: [rng.pick(others)] };
+  });
+}
+
+/** Depth rules only ever borrow within the same plan-entry kind (a consonant borrows another consonant's glyph, a vowel another vowel's) — separate seeded draws per kind keep that partition without depth rules and overflow rules colliding on the same phoneme. */
+function buildDepthRulesForPlan(plan: GlyphPlan[], depth: number, seedBase: number): GraphemeRule[] {
+  const consonantIds = plan.filter((p) => p.kind === "consonant").map((p) => p.id);
+  const vowelIds = plan.filter((p) => p.kind === "vowel").map((p) => p.id);
   return [
-    ...phonology.consonants.map((c) => ({
-      id: c.id,
-      kind: "consonant" as const,
-      build: (rng: Rng) => buildConsonantStrokes(c, style, geometry, rng),
-    })),
-    ...phonology.vowels.map((v) => ({
-      id: v.id,
-      kind: "vowel" as const,
-      build: (rng: Rng) => buildVowelStrokes(v, style, geometry, rng),
-    })),
+    ...buildDepthRules(consonantIds, depth, deriveSeed(seedBase, hashString("depth:consonant"))),
+    ...buildDepthRules(vowelIds, depth, deriveSeed(seedBase, hashString("depth:vowel"))),
   ];
 }
 
-function abjadPlan(phonology: PhonologyData, style: ScriptStyle, geometry: GeometryProfile): GlyphPlan[] {
-  return phonology.consonants.map((c) => ({
+function alphabeticPlan(
+  phonology: PhonologyData,
+  style: ScriptStyle,
+  geometry: GeometryProfile,
+  overflowStrategy: OverflowStrategy,
+  seedBase: number,
+): PlanResult {
+  const consonants = planWithOverflow(phonology.consonants, CONSONANT_GLYPH_BUDGET, overflowStrategy, seedBase, (c, markOverflow) => ({
     id: c.id,
     kind: "consonant" as const,
-    build: (rng: Rng) => buildConsonantStrokes(c, style, geometry, rng),
+    build: (rng: Rng) => buildConsonantStrokes(c, style, geometry, rng, markOverflow),
+  }));
+  const vowels = planWithOverflow(phonology.vowels, VOWEL_GLYPH_BUDGET, overflowStrategy, seedBase, (v, markOverflow) => ({
+    id: v.id,
+    kind: "vowel" as const,
+    build: (rng: Rng) => buildVowelStrokes(v, style, geometry, rng, markOverflow),
+  }));
+  return { plan: [...consonants.plan, ...vowels.plan], rules: [...consonants.rules, ...vowels.rules] };
+}
+
+function abjadPlan(
+  phonology: PhonologyData,
+  style: ScriptStyle,
+  geometry: GeometryProfile,
+  overflowStrategy: OverflowStrategy,
+  seedBase: number,
+): PlanResult {
+  return planWithOverflow(phonology.consonants, CONSONANT_GLYPH_BUDGET, overflowStrategy, seedBase, (c, markOverflow) => ({
+    id: c.id,
+    kind: "consonant" as const,
+    build: (rng: Rng) => buildConsonantStrokes(c, style, geometry, rng, markOverflow),
   }));
 }
 
-function abugidaPlan(phonology: PhonologyData, style: ScriptStyle, geometry: GeometryProfile): GlyphPlan[] {
-  return [
-    ...phonology.consonants.map((c) => ({
-      id: c.id,
-      kind: "consonant" as const,
-      build: (rng: Rng) => buildConsonantStrokes(c, style, geometry, rng),
-    })),
-    ...phonology.vowels.map((v) => ({
-      id: `diacritic:${v.id}`,
-      kind: "vowelDiacritic" as const,
-      build: (rng: Rng) => buildVowelDiacriticStrokes(v, style, geometry, rng),
-    })),
-  ];
+/** Vowel diacritics never overflow — they're cheap marks modifying a base consonant, not competing "letters," so unlike the consonant side there's no budget cap here regardless of overflowStrategy. */
+function abugidaPlan(
+  phonology: PhonologyData,
+  style: ScriptStyle,
+  geometry: GeometryProfile,
+  overflowStrategy: OverflowStrategy,
+  seedBase: number,
+): PlanResult {
+  const consonants = planWithOverflow(phonology.consonants, CONSONANT_GLYPH_BUDGET, overflowStrategy, seedBase, (c, markOverflow) => ({
+    id: c.id,
+    kind: "consonant" as const,
+    build: (rng: Rng) => buildConsonantStrokes(c, style, geometry, rng, markOverflow),
+  }));
+  const vowelPlan: GlyphPlan[] = phonology.vowels.map((v) => ({
+    id: `diacritic:${v.id}`,
+    kind: "vowelDiacritic" as const,
+    build: (rng: Rng) => buildVowelDiacriticStrokes(v, style, geometry, rng),
+  }));
+  return { plan: [...consonants.plan, ...vowelPlan], rules: consonants.rules };
 }
 
 function syllabicPlan(
@@ -479,20 +649,22 @@ function syllabicPlan(
   lexiconItems: LexiconItemData[],
   style: ScriptStyle,
   geometry: GeometryProfile,
-): GlyphPlan[] {
-  return extractAttestedSyllables(lexiconItems, phonology).map(({ consonantId, vowelId }) => ({
+): PlanResult {
+  const plan = extractAttestedSyllables(lexiconItems, phonology).map(({ consonantId, vowelId }) => ({
     id: syllableGlyphId(consonantId, vowelId),
     kind: "syllable" as const,
     build: (rng: Rng) => buildSyllableStrokes(consonantId, vowelId, phonology, style, geometry, rng),
   }));
+  return { plan, rules: [] };
 }
 
-function logographicPlan(lexiconItems: LexiconItemData[], style: ScriptStyle, geometry: GeometryProfile): GlyphPlan[] {
-  return lexiconItems.map((item) => ({
+function logographicPlan(lexiconItems: LexiconItemData[], style: ScriptStyle, geometry: GeometryProfile): PlanResult {
+  const plan = lexiconItems.map((item) => ({
     id: item.id,
     kind: "concept" as const,
     build: (rng: Rng) => buildConceptStrokes(style, geometry, rng),
   }));
+  return { plan, rules: [] };
 }
 
 function resolveGlyphs(
@@ -525,17 +697,17 @@ function resolveGlyphs(
   return glyphs;
 }
 
-function buildMapping(category: ScriptCategory, glyphs: Glyph[]): SoundToSymbolMapping {
+function buildMapping(category: ScriptCategory, glyphs: Glyph[], rules: GraphemeRule[]): SoundToSymbolMapping {
   switch (category) {
     case "alphabetic": {
       const phonemeToGlyph: Record<string, string> = {};
       for (const g of glyphs) phonemeToGlyph[g.id] = g.id;
-      return { kind: "alphabetic", phonemeToGlyph };
+      return { kind: "alphabetic", phonemeToGlyph, rules };
     }
     case "abjad": {
       const consonantToGlyph: Record<string, string> = {};
       for (const g of glyphs) consonantToGlyph[g.id] = g.id;
-      return { kind: "abjad", consonantToGlyph };
+      return { kind: "abjad", consonantToGlyph, rules };
     }
     case "abugida": {
       const baseConsonantToGlyph: Record<string, string> = {};
@@ -544,7 +716,7 @@ function buildMapping(category: ScriptCategory, glyphs: Glyph[]): SoundToSymbolM
         if (g.kind === "vowelDiacritic") vowelToDiacritic[g.id.replace(/^diacritic:/, "")] = g.id;
         else baseConsonantToGlyph[g.id] = g.id;
       }
-      return { kind: "abugida", baseConsonantToGlyph, vowelToDiacritic };
+      return { kind: "abugida", baseConsonantToGlyph, vowelToDiacritic, rules };
     }
     case "syllabic": {
       const syllableToGlyph: Record<string, string> = {};
@@ -579,27 +751,28 @@ export function generateOrthography(args: GenerateOrthographyArgs): OrthographyS
   // A nudge never touches the shared grid — only reroll/param-change does,
   // so mid-script "flavor" tweaks never fight the script's own coherence.
   const scriptStyle = mode === "nudge" && previous ? previous.scriptStyle : buildScriptStyle(params.aesthetic, seed.base);
-  // Geometry is a pure function of (cornerStyle, seed.base), and nudge keeps
-  // seed.base fixed (only variation advances) — so this stays stable across
-  // nudges for the same reason scriptStyle does, without needing its own
-  // nudge/reroll branch.
-  const geometry = buildGeometryProfile(scriptStyle.cornerStyle, seed.base);
+  // Geometry is a pure function of (cornerStyle, seed.base, ancestorScript),
+  // and nudge keeps seed.base/ancestorScript fixed (only variation advances)
+  // — so this stays stable across nudges for the same reason scriptStyle
+  // does, without needing its own nudge/reroll branch.
+  const geometry = buildGeometryProfile(scriptStyle.cornerStyle, seed.base, params.ancestorScript);
 
   const previousGlyphsById = new Map((previous?.glyphs ?? []).map((g) => [g.id, g] as const));
 
-  const plan: GlyphPlan[] =
+  const planResult: PlanResult =
     params.scriptCategory === "alphabetic"
-      ? alphabeticPlan(phonology, scriptStyle, geometry)
+      ? alphabeticPlan(phonology, scriptStyle, geometry, params.overflowStrategy, seed.base)
       : params.scriptCategory === "abjad"
-        ? abjadPlan(phonology, scriptStyle, geometry)
+        ? abjadPlan(phonology, scriptStyle, geometry, params.overflowStrategy, seed.base)
         : params.scriptCategory === "abugida"
-          ? abugidaPlan(phonology, scriptStyle, geometry)
+          ? abugidaPlan(phonology, scriptStyle, geometry, params.overflowStrategy, seed.base)
           : params.scriptCategory === "syllabic"
             ? syllabicPlan(phonology, lexiconItems, scriptStyle, geometry)
             : logographicPlan(lexiconItems, scriptStyle, geometry);
 
-  const glyphs = resolveGlyphs(plan, seed, previousGlyphsById, mode, rng, keepProbability);
-  const mapping = buildMapping(params.scriptCategory, glyphs);
+  const glyphs = resolveGlyphs(planResult.plan, seed, previousGlyphsById, mode, rng, keepProbability);
+  const depthRules = buildDepthRulesForPlan(planResult.plan, params.orthographicDepth, seed.base);
+  const mapping = buildMapping(params.scriptCategory, glyphs, [...planResult.rules, ...depthRules]);
 
   return { version: 1, seed, params, scriptStyle, glyphs, mapping, generatedAt: now };
 }
@@ -615,6 +788,33 @@ interface GraphemeGroup {
   end: number;
   glyphId: string;
   diacriticGlyphId?: string;
+  /** Additional glyphs rendered right after `glyphId`, same phoneme span — a GraphemeRule's digraph/homograph substitution, not a separate morpheme. */
+  extraGlyphIds?: string[];
+}
+
+function wordEnvironment(index: number, length: number): Exclude<GraphemeRuleEnvironment, "always"> {
+  if (index === 0) return "wordInitial";
+  if (index === length - 1) return "wordFinal";
+  return "wordMedial";
+}
+
+/** Depth/overflow irregularity lookup — an "always" rule (digraph overflow) matches regardless of position; a positional rule (depth irregularity) only matches its own environment. Rule generation keeps these disjoint per phoneme (see buildDepthRules/buildDigraphRules), so at most one rule ever matches. */
+function findGraphemeRule(rules: GraphemeRule[] | undefined, phonemeId: string, index: number, length: number): GraphemeRule | undefined {
+  if (!rules || rules.length === 0) return undefined;
+  const env = wordEnvironment(index, length);
+  return rules.find((r) => r.phonemeId === phonemeId && (r.environment === "always" || r.environment === env));
+}
+
+/** Resolves a phoneme to the glyph id sequence it actually renders as — its plain mapped glyph, or a rule's borrowed/digraph sequence when one applies. */
+function resolvePhonemeGlyphIds(
+  defaultGlyphId: string,
+  phonemeId: string,
+  index: number,
+  length: number,
+  rules: GraphemeRule[] | undefined,
+): string[] {
+  const rule = findGraphemeRule(rules, phonemeId, index, length);
+  return rule ? rule.glyphIds : [defaultGlyphId];
 }
 
 function groupIntoGraphemes(resolved: Array<ConsonantPhoneme | VowelPhoneme>, mapping: SoundToSymbolMapping): GraphemeGroup[] {
@@ -625,14 +825,24 @@ function groupIntoGraphemes(resolved: Array<ConsonantPhoneme | VowelPhoneme>, ma
   if (mapping.kind === "logographic") return groups;
 
   if (mapping.kind === "alphabetic") {
-    resolved.forEach((p, i) => groups.push({ start: i, end: i + 1, glyphId: mapping.phonemeToGlyph[p.id] ?? p.id }));
+    resolved.forEach((p, i) => {
+      const [glyphId, ...extraGlyphIds] = resolvePhonemeGlyphIds(mapping.phonemeToGlyph[p.id] ?? p.id, p.id, i, resolved.length, mapping.rules);
+      groups.push({ start: i, end: i + 1, glyphId, extraGlyphIds });
+    });
     return groups;
   }
 
   if (mapping.kind === "abjad") {
     resolved.forEach((p, i) => {
       if (isVowel(p)) return;
-      groups.push({ start: i, end: i + 1, glyphId: mapping.consonantToGlyph[p.id] ?? p.id });
+      const [glyphId, ...extraGlyphIds] = resolvePhonemeGlyphIds(
+        mapping.consonantToGlyph[p.id] ?? p.id,
+        p.id,
+        i,
+        resolved.length,
+        mapping.rules,
+      );
+      groups.push({ start: i, end: i + 1, glyphId, extraGlyphIds });
     });
     return groups;
   }
@@ -642,18 +852,26 @@ function groupIntoGraphemes(resolved: Array<ConsonantPhoneme | VowelPhoneme>, ma
     while (i < resolved.length) {
       const p = resolved[i];
       if (!isVowel(p)) {
+        const [glyphId, ...extraGlyphIds] = resolvePhonemeGlyphIds(
+          mapping.baseConsonantToGlyph[p.id] ?? p.id,
+          p.id,
+          i,
+          resolved.length,
+          mapping.rules,
+        );
         const next = resolved[i + 1];
         if (next && isVowel(next)) {
           groups.push({
             start: i,
             end: i + 2,
-            glyphId: mapping.baseConsonantToGlyph[p.id] ?? p.id,
+            glyphId,
+            extraGlyphIds,
             diacriticGlyphId: mapping.vowelToDiacritic[next.id],
           });
           i += 2;
           continue;
         }
-        groups.push({ start: i, end: i + 1, glyphId: mapping.baseConsonantToGlyph[p.id] ?? p.id });
+        groups.push({ start: i, end: i + 1, glyphId, extraGlyphIds });
         i += 1;
         continue;
       }
@@ -693,6 +911,8 @@ export interface GlyphSequenceStep {
   glyphId: string;
   /** abugida only: a vowel diacritic composed onto glyphId. */
   diacriticGlyphId?: string;
+  /** A GraphemeRule's digraph/homograph substitution — additional glyphs rendered right after glyphId, same phoneme, no junction between them. */
+  extraGlyphIds?: string[];
   junctionBefore: BoundaryTreatment | null;
 }
 
@@ -736,7 +956,7 @@ export function composeWordGlyphSequence(
       const affix = segmentAtStart ? affixesById.get(segmentAtStart.source) : undefined;
       junctionBefore = affix ? resolveBoundaryTreatment(affix.strategy, aesthetic) : "adjacency";
     }
-    return { glyphId: group.glyphId, diacriticGlyphId: group.diacriticGlyphId, junctionBefore };
+    return { glyphId: group.glyphId, diacriticGlyphId: group.diacriticGlyphId, extraGlyphIds: group.extraGlyphIds, junctionBefore };
   });
 
   const nonSegmental = affixesUsed.find((a) => a.strategy === "ablaut" || a.strategy === "templatic");

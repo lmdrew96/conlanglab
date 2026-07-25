@@ -13,16 +13,26 @@ export {
   syllableGlyphId,
 } from "../../../convex/orthography/generate";
 export { glyphToSvgPath, scriptStyleViewBox, strokeToSvgPath } from "../../../convex/orthography/render";
-export { AESTHETICS, DEFAULT_ORTHOGRAPHY_PARAMS, SCRIPT_CATEGORIES } from "../../../convex/orthography/types";
+export {
+  AESTHETICS,
+  ANCESTOR_SCRIPT_FAMILIES,
+  DEFAULT_ORTHOGRAPHY_PARAMS,
+  OVERFLOW_STRATEGIES,
+  SCRIPT_CATEGORIES,
+} from "../../../convex/orthography/types";
 
 export type { AttestedSyllable, ComposedWord, GlyphSequenceStep } from "../../../convex/orthography/generate";
 export type {
+  AncestorScriptFamily,
   Aesthetic,
   BoundaryTreatment,
   Glyph,
   GlyphKind,
+  GraphemeRule,
+  GraphemeRuleEnvironment,
   OrthographyParams,
   OrthographyStageData,
+  OverflowStrategy,
   Point,
   ScriptCategory,
   ScriptStyle,

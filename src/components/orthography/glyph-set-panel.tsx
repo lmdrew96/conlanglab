@@ -8,7 +8,7 @@ import { GlyphSvg } from "@/components/orthography/glyph-svg";
 import { LockIcon, SpeakerIcon } from "@/components/icons";
 import { playPhoneme } from "@/lib/phonology/audio";
 import { playRoot } from "@/lib/lexicon/audio";
-import type { Glyph, OrthographyStageData } from "@/lib/orthography/engine";
+import type { GraphemeRule, GraphemeRuleEnvironment, Glyph, OrthographyStageData } from "@/lib/orthography/engine";
 import type { LexiconItemData } from "@/lib/lexicon/engine";
 import type { PhonologyData } from "@/lib/phonology/engine";
 
@@ -68,6 +68,37 @@ function resolveGlyphSound(
         : null;
     }
   }
+}
+
+const RULE_ENVIRONMENT_LABEL: Record<GraphemeRuleEnvironment, string> = {
+  always: "always",
+  wordInitial: "word-initial",
+  wordMedial: "word-medial",
+  wordFinal: "word-final",
+};
+
+function RuleChip({
+  rule,
+  ipaLabel,
+  glyphs,
+  style,
+}: {
+  rule: GraphemeRule;
+  ipaLabel: string;
+  glyphs: Glyph[];
+  style: OrthographyStageData["scriptStyle"];
+}) {
+  return (
+    <span className="flex items-center gap-2 rounded-md border border-border bg-bg px-2 py-1.5 text-xs text-text-muted">
+      <span className="font-mono text-text">/{ipaLabel}/</span>
+      <span>{RULE_ENVIRONMENT_LABEL[rule.environment]}</span>
+      <span className="flex items-center">
+        {glyphs.map((g, i) => (
+          <GlyphSvg key={`${rule.phonemeId}-${i}`} glyph={g} style={style} className="h-6 w-6" />
+        ))}
+      </span>
+    </span>
+  );
 }
 
 function GlyphChip({
@@ -132,6 +163,11 @@ export function GlyphSetPanel({
 }) {
   const toggleGlyphLock = useMutation(api.orthography.mutations.toggleGlyphLock);
   const lexiconItemsById = useMemo(() => new Map(lexiconItems.map((i) => [i.id, i])), [lexiconItems]);
+  const glyphsById = useMemo(() => new Map(data.glyphs.map((g) => [g.id, g] as const)), [data.glyphs]);
+
+  // `rules` defaults to [] since a mapping generated before v2 added the field won't have it in storage at all.
+  const rules =
+    (data.mapping.kind === "alphabetic" || data.mapping.kind === "abjad" || data.mapping.kind === "abugida" ? data.mapping.rules : []) ?? [];
 
   return (
     <div className="flex flex-col gap-3 rounded-lg border border-border bg-surface p-4">
@@ -148,6 +184,27 @@ export function GlyphSetPanel({
           />
         ))}
       </div>
+
+      {rules.length > 0 && (
+        <div className="flex flex-col gap-2 border-t border-border pt-3">
+          <h4 className="text-sm font-semibold text-text-muted">
+            Irregular spellings ({rules.length})
+          </h4>
+          <p className="text-xs text-text-muted">
+            Sounds without their own dedicated letter, or spelled inconsistently in one position — from the overflow
+            strategy and orthographic depth settings.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {rules.map((rule, i) => {
+              const consonant = phonology.consonants.find((c) => c.id === rule.phonemeId);
+              const vowel = phonology.vowels.find((v) => v.id === rule.phonemeId);
+              const ipaLabel = consonant?.ipa ?? vowel?.ipa ?? rule.phonemeId;
+              const ruleGlyphs = rule.glyphIds.map((id) => glyphsById.get(id)).filter((g): g is Glyph => g != null);
+              return <RuleChip key={`${rule.phonemeId}-${rule.environment}-${i}`} rule={rule} ipaLabel={ipaLabel} glyphs={ruleGlyphs} style={data.scriptStyle} />;
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

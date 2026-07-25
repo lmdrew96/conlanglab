@@ -20,7 +20,22 @@ const scriptCategoryValidator = v.union(
   v.literal("logographic"),
 );
 const aestheticValidator = v.union(v.literal("invented"), v.literal("realLike"));
-const paramsValidator = v.object({ scriptCategory: scriptCategoryValidator, aesthetic: aestheticValidator });
+const ancestorScriptValidator = v.union(
+  v.literal("latin"),
+  v.literal("cyrillic"),
+  v.literal("arabic"),
+  v.literal("devanagari"),
+  v.literal("hangul"),
+  v.null(),
+);
+const overflowStrategyValidator = v.union(v.literal("digraph"), v.literal("diacriticStacking"), v.literal("extendedInventory"));
+const paramsValidator = v.object({
+  scriptCategory: scriptCategoryValidator,
+  aesthetic: aestheticValidator,
+  orthographicDepth: v.number(),
+  ancestorScript: ancestorScriptValidator,
+  overflowStrategy: overflowStrategyValidator,
+});
 
 async function getOrthographyRow(ctx: MutationCtx, languageId: Id<"languages">) {
   const row = await ctx.db
@@ -93,7 +108,13 @@ export const reroll = mutation({
 
     const previous = row.data as OrthographyStageData;
     const phonology = await getPhonologyData(ctx, languageId);
-    const resolvedParams = params ?? previous.params;
+    // A language generated before v2's depth/ancestorScript/overflowStrategy
+    // fields existed has a `previous.params` missing them entirely — merge
+    // over DEFAULT_ORTHOGRAPHY_PARAMS (each default is a no-op value) so an
+    // old language's reroll/nudge doesn't produce `undefined` fields that
+    // read as NaN in the UI or silently mis-branch the overflow-strategy
+    // check in generate.ts's planWithOverflow.
+    const resolvedParams = params ?? { ...DEFAULT_ORTHOGRAPHY_PARAMS, ...previous.params };
     const lexiconItems = await getLexiconItemsIfNeeded(ctx, languageId, resolvedParams.scriptCategory);
     const seed = { base: freshSeed(), variation: 0 };
     const data = generateOrthography({
@@ -120,7 +141,13 @@ export const nudge = mutation({
 
     const previous = row.data as OrthographyStageData;
     const phonology = await getPhonologyData(ctx, languageId);
-    const resolvedParams = params ?? previous.params;
+    // A language generated before v2's depth/ancestorScript/overflowStrategy
+    // fields existed has a `previous.params` missing them entirely — merge
+    // over DEFAULT_ORTHOGRAPHY_PARAMS (each default is a no-op value) so an
+    // old language's reroll/nudge doesn't produce `undefined` fields that
+    // read as NaN in the UI or silently mis-branch the overflow-strategy
+    // check in generate.ts's planWithOverflow.
+    const resolvedParams = params ?? { ...DEFAULT_ORTHOGRAPHY_PARAMS, ...previous.params };
     const lexiconItems = await getLexiconItemsIfNeeded(ctx, languageId, resolvedParams.scriptCategory);
     const seed = { base: previous.seed.base, variation: previous.seed.variation + 1 };
     const data = generateOrthography({

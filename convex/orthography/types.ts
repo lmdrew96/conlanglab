@@ -19,15 +19,47 @@ export type Aesthetic = "invented" | "realLike";
 
 export const AESTHETICS: Aesthetic[] = ["invented", "realLike"];
 
-/** Design doc Section 9.5 — the only two Orthography knobs the design doc ever mentions. No additional sliders (deliberate — see M6 plan). */
+/**
+ * Optional structural starting point for procedural generation — biases the
+ * seed-derived GeometryProfile (generate.ts) toward a real script family's
+ * overall character (stroke curviness, shape vocabulary) without
+ * reproducing its actual letterforms; still fully procedural, just a
+ * narrower/skewed random envelope. `null` = fully free generation.
+ */
+export type AncestorScriptFamily = "latin" | "cyrillic" | "arabic" | "devanagari" | "hangul";
+
+export const ANCESTOR_SCRIPT_FAMILIES: AncestorScriptFamily[] = ["latin", "cyrillic", "arabic", "devanagari", "hangul"];
+
+/** How the generator handles a phoneme inventory that exceeds a script's base glyph budget (generate.ts's BASE_GLYPH_BUDGET). Only meaningful for alphabetic/abjad/abugida — syllabic/logographic mappings have no comparable "budget" concept. */
+export type OverflowStrategy = "digraph" | "diacriticStacking" | "extendedInventory";
+
+export const OVERFLOW_STRATEGIES: OverflowStrategy[] = ["digraph", "diacriticStacking", "extendedInventory"];
+
+/**
+ * Design doc Section 9.5 named scriptCategory/aesthetic as the only two
+ * Orthography knobs for M6 (deliberately no more sliders at v1). These
+ * three are v2 follow-ups filed as their own ChaosPatch items after M6
+ * shipped, each defaulting to a no-op value so a language generated before
+ * v2 (or one that never touches these knobs) behaves identically to v1:
+ * orthographicDepth 0 = pure 1:1 mapping, ancestorScript null = fully free
+ * generation, overflowStrategy "extendedInventory" = today's unlimited-
+ * budget behavior.
+ */
 export interface OrthographyParams {
   scriptCategory: ScriptCategory;
   aesthetic: Aesthetic;
+  /** 0 = shallow/transparent (near-1:1 phoneme→grapheme, like Spanish); 1 = deep/opaque (irregular, context-dependent spellings, like English). */
+  orthographicDepth: number;
+  ancestorScript: AncestorScriptFamily | null;
+  overflowStrategy: OverflowStrategy;
 }
 
 export const DEFAULT_ORTHOGRAPHY_PARAMS: OrthographyParams = {
   scriptCategory: "alphabetic",
   aesthetic: "invented",
+  orthographicDepth: 0,
+  ancestorScript: null,
+  overflowStrategy: "extendedInventory",
 };
 
 export interface Point {
@@ -86,21 +118,41 @@ export interface Glyph {
   locked: boolean;
 }
 
+/** Environment a GraphemeRule applies in — "always" for overflow-strategy rules (the phoneme just never got a dedicated glyph); the three positional ones for orthographicDepth's context-dependent irregularity. */
+export type GraphemeRuleEnvironment = "wordInitial" | "wordMedial" | "wordFinal" | "always";
+
+/**
+ * An irregular or overflow spelling: instead of `phonemeId`'s canonical
+ * single mapped glyph, render it as `glyphIds` (borrowed from glyphs that
+ * already exist in this script — a single borrowed id is a "homograph"
+ * substitution, 2+ ids is a digraph/trigraph) whenever `environment`
+ * matches the phoneme's position in the current word. Consulted by
+ * groupIntoGraphemes/composeWordGlyphSequence ahead of the plain mapping
+ * lookup. Only ever populated for alphabetic/abjad/abugida — see
+ * OverflowStrategy and OrthographyParams.orthographicDepth.
+ */
+export interface GraphemeRule {
+  phonemeId: string;
+  environment: GraphemeRuleEnvironment;
+  glyphIds: string[];
+}
+
 /**
  * Sound/morpheme→symbol mapping (design doc Section 8.3's "Engine Output").
  * Tagged by script category so consumers can narrow without a separate
- * runtime check against `params.scriptCategory`. v1's mapping is an
+ * runtime check against `params.scriptCategory`. The base map is an
  * identity map over glyph ids by construction (a glyph's own id already IS
  * its mapping key) — kept as an explicit typed artifact anyway because it's
  * the literal Section 8.3 output the design doc asks for, gives future
  * consumers (M7 PDF export) a stable lookup without knowing per-category id
  * conventions, and leaves room for a later version where a glyph could be
- * shared across multiple sounds without a breaking change.
+ * shared across multiple sounds without a breaking change (now realized by
+ * `rules`, v2's depth/overflow irregularity).
  */
 export type SoundToSymbolMapping =
-  | { kind: "alphabetic"; phonemeToGlyph: Record<string, string> }
-  | { kind: "abjad"; consonantToGlyph: Record<string, string> } // vowels unwritten — explicit v1 scope cut
-  | { kind: "abugida"; baseConsonantToGlyph: Record<string, string>; vowelToDiacritic: Record<string, string> }
+  | { kind: "alphabetic"; phonemeToGlyph: Record<string, string>; rules: GraphemeRule[] }
+  | { kind: "abjad"; consonantToGlyph: Record<string, string>; rules: GraphemeRule[] } // vowels unwritten — explicit v1 scope cut
+  | { kind: "abugida"; baseConsonantToGlyph: Record<string, string>; vowelToDiacritic: Record<string, string>; rules: GraphemeRule[] }
   | { kind: "syllabic"; syllableToGlyph: Record<string, string> } // key: `${consonantId ?? "_"}+${vowelId}`
   | { kind: "logographic"; conceptToGlyph: Record<string, string> };
 
