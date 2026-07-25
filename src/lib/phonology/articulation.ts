@@ -219,6 +219,43 @@ const PLACE_INDEX: Record<ConsonantPlace, number> = {
 };
 
 /**
+ * Places whose constriction IS the tongue body — these are the ones real
+ * coarticulation drags toward an adjacent vowel's tongue position.
+ * Bilabial/labiodental use the lips as the primary articulator and glottal
+ * has no oral constriction at all (see PLACE_INDEX's own comment), so
+ * nudging their index by a vowel's tongue position wouldn't model anything
+ * real; only lingual places get this treatment.
+ */
+const TONGUE_DRIVEN_PLACES: ReadonlySet<ConsonantPlace> = new Set([
+  "pharyngeal", "uvular", "velar", "palatal", "retroflex", "postalveolar", "alveolar", "dental",
+]);
+
+/** Schwa's own fitted tongueIndex (see VOWEL_ARTICULATION) — the coarticulation zero-point. Front vowels sit above it, back vowels below, so `tongueIndex - NEUTRAL_TONGUE_INDEX` is already a signed front/back distance on the same 0(throat)-43(lips) axis PLACE_INDEX uses. */
+const NEUTRAL_TONGUE_INDEX = VOWEL_ARTICULATION.ə.tongueIndex;
+/** Fraction of a vowel's own front/back distance from neutral that a tongue-driven consonant's constriction center inherits. Birkholz-style coarticulation is partial assimilation, not full — this keeps the shift real but bounded (max observed shift across the vowel table is a few index positions, comparable to the gap between adjacent real place anchors). */
+const COARTICULATION_STRENGTH = 0.2;
+
+/**
+ * Approximates Birkholz-style coarticulation: a tongue-driven consonant's
+ * constriction center isn't one fixed spot regardless of context — it
+ * drifts toward whatever vowel follows it, proportional to how far that
+ * vowel's own tongue position sits from neutral (schwa). /d/ before /i/
+ * (front, high tongueIndex) constricts further forward than /d/ before /u/
+ * (back, low tongueIndex); before a near-neutral vowel it barely moves.
+ * Forward-looking only (the following vowel, via `next` — already threaded
+ * through scheduleUnits' main loop) — a consonant with no following vowel
+ * (a coda, or followed by another consonant) keeps its plain PLACE_INDEX
+ * position, same as before this existed.
+ */
+function coarticulatedIndex(place: ConsonantPlace, next: ConsonantPhoneme | VowelPhoneme | undefined): number {
+  const base = PLACE_INDEX[place];
+  if (!next || !isVowelUnit(next) || !TONGUE_DRIVEN_PLACES.has(place)) return base;
+  const art = VOWEL_ARTICULATION[next.ipa];
+  if (!art) return base;
+  return base + COARTICULATION_STRENGTH * (art.tongueIndex - NEUTRAL_TONGUE_INDEX);
+}
+
+/**
  * Voiceless-stop aspiration duration (the breathy puff scheduleStop's
  * release fires before modal voicing resumes — see its comment) — real
  * Voice Onset Time, not a flat guess. Lisker & Abramson (1964), the classic
@@ -439,9 +476,9 @@ function scheduleVowel(cursor: Cursor, phoneme: VowelPhoneme, dur: number, pitch
  * (a real vowel genuinely follows) but wrong for a coda (nothing does) —
  * without this it reads as an appended schwa after every syllable-final stop.
  */
-function scheduleStop(cursor: Cursor, place: ConsonantPlace, voiced: boolean, closeInto: number[], isFinal: boolean): void {
+function scheduleStop(cursor: Cursor, place: ConsonantPlace, voiced: boolean, closeInto: number[], isFinal: boolean, next: ConsonantPhoneme | VowelPhoneme | undefined): void {
   const closure = 0.09;
-  const index = PLACE_INDEX[place];
+  const index = coarticulatedIndex(place, next);
   at(cursor, (e) => {
     e.Glottis.isTouched = voiced;
     if (voiced) fadeGlottisIn(e);
@@ -491,7 +528,7 @@ function scheduleStop(cursor: Cursor, place: ConsonantPlace, voiced: boolean, cl
   cursor.time += 0.06;
 }
 
-function scheduleEjective(cursor: Cursor, place: ConsonantPlace, closeInto: number[], isFinal: boolean): void {
+function scheduleEjective(cursor: Cursor, place: ConsonantPlace, closeInto: number[], isFinal: boolean, next: ConsonantPhoneme | VowelPhoneme | undefined): void {
   // Ejectives use a glottalic (not pulmonic) airstream — the glottis itself
   // closes and drives the release, not the lungs — so the closure carries
   // no voicing at all, and release is a sharp glottal pulse rather than
@@ -501,7 +538,7 @@ function scheduleEjective(cursor: Cursor, place: ConsonantPlace, closeInto: numb
   // voicing step after it is suppressed when nothing follows (see
   // scheduleStop's isFinal comment — same reasoning).
   const closure = 0.1;
-  const index = PLACE_INDEX[place];
+  const index = coarticulatedIndex(place, next);
   at(cursor, (e) => {
     e.Glottis.isTouched = false;
     closeFast(e, constrict(closeInto, index, 3, 0));
@@ -530,9 +567,9 @@ function scheduleEjective(cursor: Cursor, place: ConsonantPlace, closeInto: numb
   cursor.time += 0.04;
 }
 
-function scheduleImplosive(cursor: Cursor, place: ConsonantPlace, closeInto: number[], isFinal: boolean): void {
+function scheduleImplosive(cursor: Cursor, place: ConsonantPlace, closeInto: number[], isFinal: boolean, next: ConsonantPhoneme | VowelPhoneme | undefined): void {
   const closure = 0.1;
-  const index = PLACE_INDEX[place];
+  const index = coarticulatedIndex(place, next);
   at(cursor, (e) => {
     e.Glottis.isTouched = true;
     fadeGlottisIn(e);
@@ -551,9 +588,9 @@ function scheduleImplosive(cursor: Cursor, place: ConsonantPlace, closeInto: num
   cursor.time += 0.09;
 }
 
-function scheduleNasal(cursor: Cursor, place: ConsonantPlace, closeInto: number[]): void {
+function scheduleNasal(cursor: Cursor, place: ConsonantPlace, closeInto: number[], next: ConsonantPhoneme | VowelPhoneme | undefined): void {
   const dur = 0.18;
-  const index = PLACE_INDEX[place];
+  const index = coarticulatedIndex(place, next);
   const pitch = cursor.lastPitch;
   at(cursor, (e) => {
     e.Glottis.isTouched = true;
@@ -573,9 +610,9 @@ function scheduleNasal(cursor: Cursor, place: ConsonantPlace, closeInto: number[
   });
 }
 
-function scheduleFricative(cursor: Cursor, place: ConsonantPlace, voiced: boolean, manner: "fricative" | "lateralFricative"): void {
+function scheduleFricative(cursor: Cursor, place: ConsonantPlace, voiced: boolean, manner: "fricative" | "lateralFricative", next: ConsonantPhoneme | VowelPhoneme | undefined): void {
   const dur = 0.13;
-  const index = PLACE_INDEX[place];
+  const index = coarticulatedIndex(place, next);
   const isGlottal = place === "glottal";
   const pitch = cursor.lastPitch;
   at(cursor, (e) => {
@@ -639,9 +676,9 @@ function scheduleFricative(cursor: Cursor, place: ConsonantPlace, voiced: boolea
  * left entirely to that next unit's own scheduling, exactly like a
  * standalone fricative already does.
  */
-function scheduleAffricate(cursor: Cursor, place: ConsonantPlace, voiced: boolean, closeInto: number[]): void {
+function scheduleAffricate(cursor: Cursor, place: ConsonantPlace, voiced: boolean, closeInto: number[], next: ConsonantPhoneme | VowelPhoneme | undefined): void {
   const closure = 0.09;
-  const index = PLACE_INDEX[place];
+  const index = coarticulatedIndex(place, next);
   at(cursor, (e) => {
     e.Glottis.isTouched = voiced;
     if (voiced) fadeGlottisIn(e);
@@ -666,14 +703,14 @@ function scheduleAffricate(cursor: Cursor, place: ConsonantPlace, voiced: boolea
   cursor.time += dur;
 }
 
-function scheduleClick(cursor: Cursor, place: ConsonantPlace, closeInto: number[]): void {
+function scheduleClick(cursor: Cursor, place: ConsonantPlace, closeInto: number[], next: ConsonantPhoneme | VowelPhoneme | undefined): void {
   // Clicks use a velaric (tongue-generated suction) airstream with no lung
   // involvement at all — fundamentally outside what a pulmonic tube model
   // can produce. The tract still closes (for visual/shape coherence into
   // whatever follows), but the actual click sound is the noise layer alone,
   // with the glottis silent throughout.
   const dur = 0.02;
-  const index = PLACE_INDEX[place];
+  const index = coarticulatedIndex(place, next);
   at(cursor, (e) => {
     e.Glottis.isTouched = false;
     fadeGlottisOut(e);
@@ -712,6 +749,7 @@ function scheduleTapOrTrill(
   closeInto: number[],
   isFinal: boolean,
   opensIntoNasal: boolean,
+  next: ConsonantPhoneme | VowelPhoneme | undefined,
 ): void {
   const pulses = manner === "trill" ? 3 : 1;
   // Closing and opening aren't symmetric (see the comment above
@@ -725,7 +763,7 @@ function scheduleTapOrTrill(
   // deliberate contact, or the roll drags. Left at the tap's 0.045 for both,
   // this rolled noticeably slower than a real trill; only trills speed up.
   const openDur = manner === "trill" ? 0.025 : 0.045;
-  const index = PLACE_INDEX[place];
+  const index = coarticulatedIndex(place, next);
   at(cursor, (e) => {
     e.Tract.movementSpeed = 55; // real trills involve unusually fast articulator movement, faster still than the already-raised baseline (see pink-trombone-engine.ts)
     e.Glottis.UITenseness = NEUTRAL_TENSENESS;
@@ -812,26 +850,26 @@ export function scheduleUnits(units: Array<ConsonantPhoneme | VowelPhoneme>, str
     const { manner, place, voiced } = unit.features;
     switch (manner) {
       case "stop":
-        scheduleStop(cursor, place, voiced, closeInto, isFinal);
+        scheduleStop(cursor, place, voiced, closeInto, isFinal, next);
         break;
       case "ejective":
-        scheduleEjective(cursor, place, closeInto, isFinal);
+        scheduleEjective(cursor, place, closeInto, isFinal, next);
         break;
       case "implosive":
-        scheduleImplosive(cursor, place, closeInto, isFinal);
+        scheduleImplosive(cursor, place, closeInto, isFinal, next);
         break;
       case "nasal":
-        scheduleNasal(cursor, place, closeInto);
+        scheduleNasal(cursor, place, closeInto, next);
         break;
       case "fricative":
       case "lateralFricative":
-        scheduleFricative(cursor, place, voiced, manner);
+        scheduleFricative(cursor, place, voiced, manner, next);
         break;
       case "affricate":
-        scheduleAffricate(cursor, place, voiced, closeInto);
+        scheduleAffricate(cursor, place, voiced, closeInto, next);
         break;
       case "click":
-        scheduleClick(cursor, place, closeInto);
+        scheduleClick(cursor, place, closeInto, next);
         break;
       case "approximant":
       case "lateralApproximant":
@@ -840,7 +878,7 @@ export function scheduleUnits(units: Array<ConsonantPhoneme | VowelPhoneme>, str
       case "trill":
       case "tap": {
         const opensIntoNasal = next !== undefined && !isVowelUnit(next) && next.features.manner === "nasal";
-        scheduleTapOrTrill(cursor, place, manner, closeInto, isFinal, opensIntoNasal);
+        scheduleTapOrTrill(cursor, place, manner, closeInto, isFinal, opensIntoNasal, next);
         break;
       }
     }
