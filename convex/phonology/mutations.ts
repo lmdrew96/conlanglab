@@ -5,8 +5,10 @@ import { appendHistory, reconstructAt } from "../lib/history";
 import { freshSeed } from "../lib/rng";
 // Cross-stage staleness (Section 10.2a) — only this file knows when an
 // inventory edit actually happened, so it's the one place that flags
-// downstream lexicon roots stale rather than lexicon polling phonology.
+// downstream lexicon roots / morphology affixes stale rather than either
+// stage polling phonology.
 import { flagStaleLexiconItems } from "../lexicon/staleness";
+import { flagStaleMorphologyItems } from "../morphology/staleness";
 import { diffPhonology } from "./diff";
 import { generatePhonology } from "./generate";
 import { ALL_TARGETS, DEFAULT_PARAMS } from "./types";
@@ -105,7 +107,10 @@ export const reroll = mutation({
     });
 
     await ctx.db.patch(row._id, { data });
-    if (targets.includes("inventory")) await flagStaleLexiconItems(ctx, languageId, currentPhonemeIds(data));
+    if (targets.includes("inventory")) {
+      await flagStaleLexiconItems(ctx, languageId, currentPhonemeIds(data));
+      await flagStaleMorphologyItems(ctx, languageId, currentPhonemeIds(data));
+    }
     await appendHistory(ctx, { languageId, stage: "phonology", data, trigger: "reroll", diffFn: diffPhonology });
   },
 });
@@ -129,7 +134,10 @@ export const nudge = mutation({
     });
 
     await ctx.db.patch(row._id, { data });
-    if (targets.includes("inventory")) await flagStaleLexiconItems(ctx, languageId, currentPhonemeIds(data));
+    if (targets.includes("inventory")) {
+      await flagStaleLexiconItems(ctx, languageId, currentPhonemeIds(data));
+      await flagStaleMorphologyItems(ctx, languageId, currentPhonemeIds(data));
+    }
     await appendHistory(ctx, { languageId, stage: "phonology", data, trigger: "nudge", diffFn: diffPhonology });
   },
 });
@@ -300,9 +308,10 @@ export const revertToHistoryEntry = mutation({
 
     await ctx.db.patch(row._id, { data: reconstructed });
     // A revert can restore an older inventory that dropped phonemes newer
-    // roots depend on — always re-check, unlike reroll/nudge which only
-    // check when the "inventory" target was actually in play.
+    // roots/affixes depend on — always re-check, unlike reroll/nudge which
+    // only check when the "inventory" target was actually in play.
     await flagStaleLexiconItems(ctx, languageId, currentPhonemeIds(reconstructed));
+    await flagStaleMorphologyItems(ctx, languageId, currentPhonemeIds(reconstructed));
     await appendHistory(ctx, {
       languageId,
       stage: "phonology",

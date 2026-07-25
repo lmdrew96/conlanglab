@@ -60,12 +60,17 @@ export default defineSchema({
   morphologyItems: defineTable({
     languageId: v.id("languages"),
     morphologyId: v.id("morphology"),
+    // Stable per-affix slug (same role as lexiconItems.conceptId) — lets a
+    // single affix be looked up/patched directly for item-level
+    // lock/nudge/reroll (Section 9.1) without a table scan.
+    affixId: v.string(),
     data: v.optional(v.any()),
     locked: v.boolean(),
     staleSince: v.union(v.number(), v.null()),
   })
     .index("by_language", ["languageId"])
-    .index("by_morphology", ["morphologyId"]),
+    .index("by_morphology", ["morphologyId"])
+    .index("by_language_affix", ["languageId", "affixId"]),
 
   // Stage-level document (Section 10.1): seed + params (domain weights) +
   // generation metadata. The ~500 roots themselves live in lexiconItems
