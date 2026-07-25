@@ -2,6 +2,7 @@
 
 import { formatDomain, formatPartOfSpeech } from "@/lib/lexicon/format";
 import { playRoot } from "@/lib/lexicon/audio";
+import { generatePseudotext } from "@/lib/lexicon/pseudotext";
 import { SpeakerIcon } from "@/components/icons";
 import type { FlexibleDomain, LexiconItemData } from "@/lib/lexicon/engine";
 import type { PhonologyData } from "@/lib/phonology/engine";
@@ -15,6 +16,8 @@ export function LivePreviewPanel({
   isDirty: boolean;
   phonology: PhonologyData;
 }) {
+  const pseudotext = generatePseudotext(preview, phonology.seed.base);
+
   return (
     <div className="rounded-lg border border-border bg-surface p-4">
       <div className="mb-2 flex items-center justify-between">
@@ -45,6 +48,12 @@ export function LivePreviewPanel({
             </li>
           ))}
         </ul>
+      )}
+      {pseudotext.length > 0 && (
+        <div className="mt-3 border-t border-border pt-3">
+          <h4 className="mb-1 text-xs font-semibold text-text-muted">Sample text</h4>
+          <p className="text-sm italic text-text-muted">{pseudotext.join(" ")}</p>
+        </div>
       )}
     </div>
   );
