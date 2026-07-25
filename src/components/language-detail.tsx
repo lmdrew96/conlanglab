@@ -1,7 +1,8 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
-import { useConvexAuth, useQuery } from "convex/react";
+import { useConvexAuth, useMutation, useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { Header } from "@/components/header";
@@ -31,6 +32,9 @@ const STAGE_ROUTES: Partial<Record<keyof typeof STAGE_MILESTONE, string>> = {
 export function LanguageDetail({ id }: { id: string }) {
   const { isAuthenticated } = useConvexAuth();
   const language = useQuery(api.languages.get, isAuthenticated ? { id: id as Id<"languages"> } : "skip");
+  const rename = useMutation(api.languages.rename);
+  const [editingName, setEditingName] = useState(false);
+  const [draftName, setDraftName] = useState("");
 
   if (language === undefined) {
     return (
@@ -55,6 +59,18 @@ export function LanguageDetail({ id }: { id: string }) {
     );
   }
 
+  const startEditing = () => {
+    setDraftName(language.name);
+    setEditingName(true);
+  };
+
+  const commitRename = async () => {
+    setEditingName(false);
+    const trimmed = draftName.trim();
+    if (!trimmed || trimmed === language.name) return;
+    await rename({ id: id as Id<"languages">, name: trimmed });
+  };
+
   return (
     <div className="flex flex-1 flex-col">
       <Header />
@@ -63,7 +79,30 @@ export function LanguageDetail({ id }: { id: string }) {
           <Link href="/" className="text-sm text-text-muted hover:text-text">
             ← Library
           </Link>
-          <h1 className="mt-1 text-2xl font-semibold text-text">{language.name}</h1>
+          {editingName ? (
+            <input
+              autoFocus
+              value={draftName}
+              onChange={(e) => setDraftName(e.target.value)}
+              onBlur={commitRename}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commitRename();
+                if (e.key === "Escape") setEditingName(false);
+              }}
+              className="mt-1 w-full rounded-md border border-border bg-surface px-2 py-1 text-2xl font-semibold text-text focus:outline-none focus:ring-2 focus:ring-accent"
+            />
+          ) : (
+            <h1 className="mt-1 text-2xl font-semibold text-text">
+              <button
+                type="button"
+                onClick={startEditing}
+                title="Click to rename"
+                className="text-left hover:text-accent"
+              >
+                {language.name}
+              </button>
+            </h1>
+          )}
         </div>
 
         <ul className="flex flex-col gap-2">
