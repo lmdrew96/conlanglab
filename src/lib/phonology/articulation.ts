@@ -155,8 +155,17 @@ const VOWEL_ARTICULATION: Record<string, VowelArticulation> = {
   a: { tongueIndex: 12, tongueDiameter: 3.28 },
   // target 781/1065; got 727/1066 — F2 near-exact, F1 close, same lower-bound ceiling as /a/
   ɑ: { tongueIndex: 12, tongueDiameter: 2.31 },
-  // target 486/1826; got 484/1825 — near-exact
-  ə: { tongueIndex: 24.95, tongueDiameter: 2.74 },
+  // target 500/1500 (see below); the old fit (tongueIndex 24.95) chased
+  // 486/1826 — a target derived by averaging ɘ/ɜ from the reference chart,
+  // whose own author flagged those central-vowel measurements as unreliable.
+  // That average's F2 landed within 14Hz of /ɛ/'s F2 (1840), so this schwa
+  // read as an /ɛ/-adjacent front vowel instead of neutral central "uh".
+  // Refit against the textbook neutral-vowel target instead (F1~500/F2~1500
+  // — the resonances of a uniform, unconstricted vocal tract, i.e. what a
+  // tract at rest actually sounds like): re-ran the same grid-search
+  // approach (see file comment above) directly against 500/1500 — got
+  // 506/1497, near-exact.
+  ə: { tongueIndex: 22, tongueDiameter: 2.4 },
   // target 541/830; got 538/824 — near-exact
   ɔ: { tongueIndex: 12, tongueDiameter: 2.1, rounded: "back", lipDiameter: 0.95 },
   // target 406/727; got 409/738 — near-exact
