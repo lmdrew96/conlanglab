@@ -12,17 +12,6 @@ export function GlyphSvg({
 }) {
   return (
     <svg viewBox={scriptStyleViewBox(style)} className={className} aria-label={`Glyph for ${glyph.id}`}>
-      {style.connectorBar && (
-        <line
-          x1={0}
-          y1={style.connectorBar.y}
-          x2={style.viewBoxSize}
-          y2={style.connectorBar.y}
-          stroke="currentColor"
-          strokeWidth={style.strokeWidth * 0.5}
-          opacity={0.4}
-        />
-      )}
       <path
         d={glyphToSvgPath(glyph)}
         fill="none"

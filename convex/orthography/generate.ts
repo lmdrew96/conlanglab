@@ -58,15 +58,14 @@ export function syllableGlyphId(consonantId: string | null, vowelId: string): st
 const STYLE_SALT = 0xc0ffee;
 
 /**
- * `strokeWidth`/`strokeCountRange`/`connectorBar` used to come straight off
- * the 2-entry AESTHETIC_STYLE_PRESETS table, so every script sharing an
- * aesthetic had byte-identical "visual weight" (line thickness, glyph
- * density) — part of why regenerated scripts all looked like the same font.
- * Now derived per (aesthetic, seed.base) within an aesthetic-appropriate
- * envelope: invented stays the thinner/sparser archetype and realLike the
- * heavier/denser one on average, but two scripts of the same aesthetic can
- * still land anywhere in that envelope — one bold and minimal, another thin
- * and elaborate.
+ * `strokeWidth`/`strokeCountRange` used to come straight off the 2-entry
+ * AESTHETIC_STYLE_PRESETS table, so every script sharing an aesthetic had
+ * byte-identical "visual weight" (line thickness, glyph density) — part of
+ * why regenerated scripts all looked like the same font. Now derived per
+ * (aesthetic, seed.base) within an aesthetic-appropriate envelope: invented
+ * stays the thinner/sparser archetype and realLike the heavier/denser one
+ * on average, but two scripts of the same aesthetic can still land anywhere
+ * in that envelope — one bold and minimal, another thin and elaborate.
  */
 export function buildScriptStyle(aesthetic: Aesthetic, seedBase: number): ScriptStyle {
   const preset = AESTHETIC_STYLE_PRESETS[aesthetic];
@@ -74,8 +73,7 @@ export function buildScriptStyle(aesthetic: Aesthetic, seedBase: number): Script
   const strokeWidth = aesthetic === "invented" ? rng.int(3, 6) : rng.int(2, 5);
   const strokeCountRange: [number, number] =
     aesthetic === "invented" ? [rng.int(1, 2), rng.int(3, 5)] : [rng.int(2, 3), rng.int(4, 6)];
-  const connectorBar = preset.connectorBar ? { y: rng.int(15, 26) } : null;
-  return { version: 1, ...preset, strokeWidth, strokeCountRange, connectorBar };
+  return { version: 1, ...preset, strokeWidth, strokeCountRange };
 }
 
 // --- Stroke composition (Section 14.2's shared grid + shared stroke vocabulary) ---

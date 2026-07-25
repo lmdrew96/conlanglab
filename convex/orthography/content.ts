@@ -10,10 +10,9 @@ import type { AffixStrategy } from "../morphology/types";
 import type { Aesthetic, ScriptStyle, Stroke } from "./types";
 
 /**
- * Invented = sharp corners, no shared headline — a deliberately alien,
- * blocky construction. realLike = rounded corners + a shared connector bar
- * (evokes Devanagari's shirorekha without copying it), aiming for a more
- * "familiar script family" visual logic per design doc Section 8.2.
+ * Invented = sharp corners — a deliberately alien, blocky construction.
+ * realLike = rounded corners, aiming for a more "familiar script family"
+ * visual logic per design doc Section 8.2.
  */
 export const AESTHETIC_STYLE_PRESETS: Record<Aesthetic, Omit<ScriptStyle, "version">> = {
   invented: {
@@ -22,7 +21,6 @@ export const AESTHETIC_STYLE_PRESETS: Record<Aesthetic, Omit<ScriptStyle, "versi
     xHeightY: 20,
     strokeWidth: 4,
     cornerStyle: "sharp",
-    connectorBar: null,
     strokeCountRange: [2, 4],
   },
   realLike: {
@@ -31,7 +29,6 @@ export const AESTHETIC_STYLE_PRESETS: Record<Aesthetic, Omit<ScriptStyle, "versi
     xHeightY: 28,
     strokeWidth: 3,
     cornerStyle: "rounded",
-    connectorBar: { y: 20 },
     strokeCountRange: [2, 5],
   },
 };

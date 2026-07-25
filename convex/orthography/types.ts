@@ -60,8 +60,6 @@ export interface ScriptStyle {
   xHeightY: number;
   strokeWidth: number;
   cornerStyle: "sharp" | "rounded";
-  /** A shared connecting bar every glyph sits under — evokes Devanagari's shirorekha without copying it. realLike aesthetic only; null for invented. */
-  connectorBar: { y: number } | null;
   strokeCountRange: [number, number];
 }
 
