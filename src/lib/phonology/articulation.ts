@@ -139,8 +139,13 @@ interface VowelArticulation {
 const VOWEL_ARTICULATION: Record<string, VowelArticulation> = {
   // target F1/F2 = 294/2343; got 280/2385
   i: { tongueIndex: 27.5, tongueDiameter: 2.2 },
-  // target 360/2187; got 323/2186
-  ɪ: { tongueIndex: 26.75, tongueDiameter: 2.29 },
+  // target 360/2187; was 323/2186 (diameter 2.29) — F1 undershot its own
+  // target by 37Hz, which also shrank the i/ɪ height contrast (F1 is the
+  // primary height cue) from the real 66Hz gap down to 43Hz, reading as
+  // "almost indistinguishable." Raised diameter using the local diameter->F1
+  // slope observed between ɪ and e (~200Hz/unit) to close most of that gap;
+  // not re-measured against the live engine, so worth an ear-check.
+  ɪ: { tongueIndex: 26.75, tongueDiameter: 2.48 },
   // target 434/2148; got 431/2132 — excellent fit
   e: { tongueIndex: 28.5, tongueDiameter: 2.83 },
   // target 581/1840; got 538/1836
