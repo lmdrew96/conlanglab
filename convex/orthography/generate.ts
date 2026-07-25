@@ -35,7 +35,7 @@ import type {
 import { isVowel, resolvePhonemes } from "../morphology/generate";
 import type { AssembledWord } from "../morphology/generate";
 import type { AffixStrategy, MorphologyAffixData } from "../morphology/types";
-import type { ConsonantPhoneme, PhonologyData, VowelPhoneme } from "../phonology/types";
+import type { ConsonantPhoneme, PhonologyData, VowelHeight, VowelPhoneme } from "../phonology/types";
 import type { LexiconItemData } from "../lexicon/types";
 
 const DEFAULT_NUDGE_KEEP_PROBABILITY = 0.75;
@@ -55,8 +55,27 @@ export function syllableGlyphId(consonantId: string | null, vowelId: string): st
   return `${consonantId ?? "_"}+${vowelId}`;
 }
 
-export function buildScriptStyle(aesthetic: Aesthetic): ScriptStyle {
-  return { version: 1, ...AESTHETIC_STYLE_PRESETS[aesthetic] };
+const STYLE_SALT = 0xc0ffee;
+
+/**
+ * `strokeWidth`/`strokeCountRange`/`connectorBar` used to come straight off
+ * the 2-entry AESTHETIC_STYLE_PRESETS table, so every script sharing an
+ * aesthetic had byte-identical "visual weight" (line thickness, glyph
+ * density) — part of why regenerated scripts all looked like the same font.
+ * Now derived per (aesthetic, seed.base) within an aesthetic-appropriate
+ * envelope: invented stays the thinner/sparser archetype and realLike the
+ * heavier/denser one on average, but two scripts of the same aesthetic can
+ * still land anywhere in that envelope — one bold and minimal, another thin
+ * and elaborate.
+ */
+export function buildScriptStyle(aesthetic: Aesthetic, seedBase: number): ScriptStyle {
+  const preset = AESTHETIC_STYLE_PRESETS[aesthetic];
+  const rng = new Rng(deriveSeed(seedBase, STYLE_SALT));
+  const strokeWidth = aesthetic === "invented" ? rng.int(3, 6) : rng.int(2, 5);
+  const strokeCountRange: [number, number] =
+    aesthetic === "invented" ? [rng.int(1, 2), rng.int(3, 5)] : [rng.int(2, 3), rng.int(4, 6)];
+  const connectorBar = preset.connectorBar ? { y: rng.int(15, 26) } : null;
+  return { version: 1, ...preset, strokeWidth, strokeCountRange, connectorBar };
 }
 
 // --- Stroke composition (Section 14.2's shared grid + shared stroke vocabulary) ---
@@ -67,49 +86,130 @@ function gridX(bias: number, style: ScriptStyle, jitter: number): number {
   return margin + bias * usable + jitter;
 }
 
-function buildStrokeOfKind(kind: Stroke["kind"], xBias: number, style: ScriptStyle, rng: Rng): Stroke {
-  const yTop = style.xHeightY;
-  const yBottom = style.baselineY;
+const GEOMETRY_SALT = 0xbeef;
+
+/**
+ * A script's own "handwriting" — jitter spread, a consistent lean direction,
+ * and hook/curve size ranges — derived once per (cornerStyle, seed.base) so
+ * every reroll produces a structurally distinct-looking script instead of
+ * reshuffling phonemes onto an identical fixed skeleton (the "orthography
+ * variety" bug: every invented/realLike script looked the same because
+ * AESTHETIC_STYLE_PRESETS is a static 2-entry table and the old hardcoded
+ * jitter/hook/curve constants left almost no room for seeds to differ).
+ * Bounds stay envelope-appropriate per cornerStyle so "invented" always
+ * reads sharper/tighter and "realLike" always reads rounder/looser — only
+ * the specific numbers within that envelope vary by seed.
+ */
+interface GeometryProfile {
+  jitterSpread: number;
+  /** -1..1, a consistent per-script lean applied to every line/curve endpoint so strokes share a "handwriting angle" instead of jittering independently. */
+  slant: number;
+  curveBulgeRange: [number, number];
+  hookLengthRange: [number, number];
+  dotScale: number;
+  /**
+   * 0 = this script strongly favors geometric/discrete strokes (line, dot)
+   * wherever a manner's STROKE_FAMILY_BY_MANNER pool offers a choice; 1 =
+   * strongly favors flowing/cursive strokes (curve, hook). Every manner pool
+   * now includes at least one of each (see content.ts), so this one number
+   * sweeps the whole consonant inventory — the mechanism that makes two
+   * scripts of the same aesthetic read like distinct typefaces (one blocky,
+   * one cursive) rather than just reshuffled letterforms.
+   */
+  shapeBias: number;
+}
+
+function buildGeometryProfile(cornerStyle: ScriptStyle["cornerStyle"], seedBase: number): GeometryProfile {
+  const rng = new Rng(deriveSeed(seedBase, GEOMETRY_SALT));
+  const rounded = cornerStyle === "rounded";
+  return {
+    jitterSpread: rng.int(rounded ? 5 : 6, rounded ? 12 : 16),
+    slant: rng.float() * 2 - 1,
+    curveBulgeRange: rounded ? [rng.int(8, 14), rng.int(16, 28)] : [rng.int(2, 6), rng.int(7, 14)],
+    hookLengthRange: rounded ? [rng.int(12, 20), rng.int(24, 42)] : [rng.int(8, 16), rng.int(18, 34)],
+    dotScale: rng.float() * 0.6 + 0.8,
+    shapeBias: rng.float(),
+  };
+}
+
+const FLOWING_STROKE_KINDS = new Set<Stroke["kind"]>(["curve", "hook"]);
+
+/** Picks a stroke kind from an allowed pool, weighted by the script's shapeBias — a no-op when the pool has only one option (most manners still constrain to a fixed family; this only decides which member of a mixed family gets favored). */
+function pickStrokeKind(kinds: readonly Stroke["kind"][], geometry: GeometryProfile, rng: Rng): Stroke["kind"] {
+  if (kinds.length === 1) return kinds[0];
+  return rng.weightedPick(kinds, (kind) => (FLOWING_STROKE_KINDS.has(kind) ? geometry.shapeBias : 1 - geometry.shapeBias));
+}
+
+/**
+ * Vowel height was previously computed (VOWEL_HEIGHT_Y) but never actually
+ * consulted when placing a vowel's stroke — every vowel glyph drew across
+ * the full x-height→baseline span regardless of height, so vowels sharing a
+ * backness (most of them) rendered near-identically. This maps height onto
+ * a real sub-band of the available vertical range; `height: null` (used by
+ * consonants/concepts, which have no height feature) keeps the full band.
+ */
+function heightBand(height: VowelHeight | null, top: number, bottom: number): [number, number] {
+  if (height === null) return [top, bottom];
+  const span = bottom - top;
+  const center = top + VOWEL_HEIGHT_Y[height] * span;
+  const half = span * 0.22;
+  return [Math.max(top, center - half), Math.min(bottom, center + half)];
+}
+
+function buildStrokeOfKind(
+  kind: Stroke["kind"],
+  xBias: number,
+  yBand: [number, number],
+  style: ScriptStyle,
+  geometry: GeometryProfile,
+  rng: Rng,
+): Stroke {
+  const [yTop, yBottom] = yBand;
+  const jitter = geometry.jitterSpread;
+  const lean = geometry.slant * jitter;
   switch (kind) {
     case "line": {
-      const x = gridX(xBias, style, rng.int(-6, 6));
-      return { kind: "line", from: { x, y: yTop }, to: { x: x + rng.int(-6, 6), y: yBottom } };
+      const x = gridX(xBias, style, rng.int(-jitter, jitter));
+      return { kind: "line", from: { x, y: yTop }, to: { x: x + lean + rng.int(-jitter, jitter), y: yBottom } };
     }
     case "curve": {
-      const x = gridX(xBias, style, rng.int(-6, 6));
-      const curveAmount = style.cornerStyle === "rounded" ? rng.int(10, 20) : rng.int(2, 6);
+      const x = gridX(xBias, style, rng.int(-jitter, jitter));
+      const [bulgeMin, bulgeMax] = geometry.curveBulgeRange;
+      const curveAmount = rng.int(bulgeMin, bulgeMax);
       return {
         kind: "curve",
         from: { x, y: yTop },
-        control: { x: x + curveAmount, y: (yTop + yBottom) / 2 },
-        to: { x: x + rng.int(-6, 6), y: yBottom },
+        control: { x: x + curveAmount + lean, y: (yTop + yBottom) / 2 },
+        to: { x: x + lean + rng.int(-jitter, jitter), y: yBottom },
       };
     }
     case "dot": {
-      const x = gridX(xBias, style, rng.int(-6, 6));
-      return { kind: "dot", center: { x, y: rng.int(yTop, yBottom) }, radius: style.strokeWidth * 1.2 };
+      const x = gridX(xBias, style, rng.int(-jitter, jitter));
+      return { kind: "dot", center: { x, y: rng.int(yTop, yBottom) }, radius: style.strokeWidth * geometry.dotScale };
     }
     case "hook": {
-      const x = gridX(xBias, style, rng.int(-6, 6));
-      const curvature = style.cornerStyle === "rounded" ? rng.int(20, 40) : rng.int(5, 15);
+      const x = gridX(xBias, style, rng.int(-jitter, jitter));
+      const [lenMin, lenMax] = geometry.hookLengthRange;
+      const [curvMin, curvMax] = geometry.curveBulgeRange;
       return {
         kind: "hook",
         anchor: { x, y: rng.int(yTop, yBottom) },
         angle: rng.int(0, 359),
-        length: rng.int(15, 30),
-        curvature,
+        length: rng.int(lenMin, lenMax),
+        curvature: rng.int(curvMin, curvMax),
       };
     }
   }
 }
 
-function buildConsonantStrokes(phoneme: ConsonantPhoneme, style: ScriptStyle, rng: Rng): Stroke[] {
+function buildConsonantStrokes(phoneme: ConsonantPhoneme, style: ScriptStyle, geometry: GeometryProfile, rng: Rng): Stroke[] {
   const family = STROKE_FAMILY_BY_MANNER[phoneme.features.manner];
   const xBias = ORIENTATION_BY_PLACE[phoneme.features.place];
+  const yBand: [number, number] = [style.xHeightY, style.baselineY];
   const [minStrokes, maxStrokes] = style.strokeCountRange;
   const strokes: Stroke[] = [];
   for (let i = 0; i < rng.int(minStrokes, maxStrokes); i++) {
-    strokes.push(buildStrokeOfKind(rng.pick(family), xBias, style, rng));
+    strokes.push(buildStrokeOfKind(pickStrokeKind(family, geometry, rng), xBias, yBand, style, geometry, rng));
   }
   if (phoneme.features.voiced) {
     strokes.push({ kind: "dot", center: { x: gridX(xBias, style, 8), y: style.xHeightY - 6 }, radius: style.strokeWidth });
@@ -121,12 +221,13 @@ function buildConsonantStrokes(phoneme: ConsonantPhoneme, style: ScriptStyle, rn
   return strokes;
 }
 
-function buildVowelStrokes(phoneme: VowelPhoneme, style: ScriptStyle, rng: Rng): Stroke[] {
+function buildVowelStrokes(phoneme: VowelPhoneme, style: ScriptStyle, geometry: GeometryProfile, rng: Rng): Stroke[] {
   const xBias = VOWEL_BACKNESS_X[phoneme.features.backness];
+  const yBand = heightBand(phoneme.features.height, style.xHeightY, style.baselineY);
   const count = Math.max(1, style.strokeCountRange[0] - 1);
   const strokes: Stroke[] = [];
   for (let i = 0; i < count; i++) {
-    strokes.push(buildStrokeOfKind(rng.pick(VOWEL_STROKE_KINDS), xBias, style, rng));
+    strokes.push(buildStrokeOfKind(pickStrokeKind(VOWEL_STROKE_KINDS, geometry, rng), xBias, yBand, style, geometry, rng));
   }
   if (phoneme.features.rounded) {
     strokes.push({ kind: "dot", center: { x: gridX(xBias, style, -8), y: style.baselineY - 4 }, radius: style.strokeWidth });
@@ -134,13 +235,15 @@ function buildVowelStrokes(phoneme: VowelPhoneme, style: ScriptStyle, rng: Rng):
   return strokes;
 }
 
-/** A smaller mark in the ascender band above x-height, composed onto a base consonant glyph at word-composition time rather than stored as part of it (abugida vowel diacritics). */
-function buildVowelDiacriticStrokes(phoneme: VowelPhoneme, style: ScriptStyle, rng: Rng): Stroke[] {
+/** A smaller mark in the ascender band above x-height, composed onto a base consonant glyph at word-composition time rather than stored as part of it (abugida vowel diacritics). Previously drew its primary stroke across the same full x-height→baseline band as a consonant (the ascender-band placement only ever applied to the optional rounding dot) — now the primary stroke itself lives in the ascender band, keyed by height, so diacritics actually read as a small mark riding above the base glyph. */
+function buildVowelDiacriticStrokes(phoneme: VowelPhoneme, style: ScriptStyle, geometry: GeometryProfile, rng: Rng): Stroke[] {
   const xBias = VOWEL_BACKNESS_X[phoneme.features.backness];
-  const y = style.xHeightY * (1 - VOWEL_HEIGHT_Y[phoneme.features.height] * 0.4);
-  const strokes: Stroke[] = [buildStrokeOfKind(rng.pick(VOWEL_STROKE_KINDS), xBias, style, rng)];
+  const ascenderTop = style.xHeightY * 0.15;
+  const ascenderBottom = style.xHeightY * 0.9;
+  const yBand = heightBand(phoneme.features.height, ascenderTop, ascenderBottom);
+  const strokes: Stroke[] = [buildStrokeOfKind(pickStrokeKind(VOWEL_STROKE_KINDS, geometry, rng), xBias, yBand, style, geometry, rng)];
   if (phoneme.features.rounded) {
-    strokes.push({ kind: "dot", center: { x: gridX(xBias, style, 4), y }, radius: style.strokeWidth * 0.8 });
+    strokes.push({ kind: "dot", center: { x: gridX(xBias, style, 4), y: ascenderBottom }, radius: style.strokeWidth * 0.8 });
   }
   return strokes;
 }
@@ -150,21 +253,23 @@ function buildSyllableStrokes(
   vowelId: string,
   phonology: PhonologyData,
   style: ScriptStyle,
+  geometry: GeometryProfile,
   rng: Rng,
 ): Stroke[] {
   const vowel = phonology.vowels.find((v) => v.id === vowelId);
   if (!vowel) return [];
-  const vowelStrokes = buildVowelStrokes(vowel, style, rng);
+  const vowelStrokes = buildVowelStrokes(vowel, style, geometry, rng);
   const consonant = consonantId ? phonology.consonants.find((c) => c.id === consonantId) : undefined;
   if (!consonant) return vowelStrokes;
-  return [...buildConsonantStrokes(consonant, style, rng), ...vowelStrokes];
+  return [...buildConsonantStrokes(consonant, style, geometry, rng), ...vowelStrokes];
 }
 
 /** Logographic glyphs have no phoneme features to key off — composed from the full stroke vocabulary across the whole grid instead of a manner/place-constrained family. */
-function buildConceptStrokes(style: ScriptStyle, rng: Rng): Stroke[] {
+function buildConceptStrokes(style: ScriptStyle, geometry: GeometryProfile, rng: Rng): Stroke[] {
+  const yBand: [number, number] = [style.xHeightY, style.baselineY];
   const strokes: Stroke[] = [];
   for (let i = 0; i < rng.int(style.strokeCountRange[0], style.strokeCountRange[1] + 1); i++) {
-    strokes.push(buildStrokeOfKind(rng.pick(ALL_STROKE_KINDS), rng.float(), style, rng));
+    strokes.push(buildStrokeOfKind(pickStrokeKind(ALL_STROKE_KINDS, geometry, rng), rng.float(), yBand, style, geometry, rng));
   }
   return strokes;
 }
@@ -181,55 +286,76 @@ const PREVIEW_SALT = 0xfeed;
  * all; syllabic/logographic samples use placeholder ids rather than real
  * attested syllables/concepts, since the full lexicon-derived set isn't
  * being computed here — this is a style preview, not a mapping preview.
+ * Returns `style` alongside `glyphs` (rather than a bare Glyph[]) because
+ * ScriptStyle is now seed-derived (stroke width, count range, connector bar
+ * position) — a caller that rebuilt its own style from just `aesthetic`
+ * would render these glyphs' baked-in coordinates against a mismatched
+ * viewBox/stroke-width, so the exact style used at generation time has to
+ * travel with them.
  */
-export function sampleGlyphs(params: OrthographyParams, phonology: PhonologyData, seedBase: number): Glyph[] {
-  const style = buildScriptStyle(params.aesthetic);
+export function sampleGlyphs(
+  params: OrthographyParams,
+  phonology: PhonologyData,
+  seedBase: number,
+): { style: ScriptStyle; glyphs: Glyph[] } {
   const previewSeedBase = deriveSeed(seedBase, hashString(`${params.scriptCategory}:${params.aesthetic}`) ^ PREVIEW_SALT);
+  const style = buildScriptStyle(params.aesthetic, previewSeedBase);
+  const geometry = buildGeometryProfile(style.cornerStyle, previewSeedBase);
   const rng = new Rng(previewSeedBase);
   const placeholderSeed: Seed = { base: previewSeedBase, variation: 0 };
 
-  switch (params.scriptCategory) {
-    case "alphabetic":
-    case "abjad": {
-      return phonology.consonants.slice(0, PREVIEW_SAMPLE_COUNT).map((c) => ({
-        id: c.id,
-        kind: "consonant" as const,
-        strokes: buildConsonantStrokes(c, style, rng),
-        seed: placeholderSeed,
-        locked: false,
-      }));
-    }
-    case "abugida": {
-      const consonant = phonology.consonants[0];
-      const vowel = phonology.vowels[0];
-      if (!consonant || !vowel) return [];
-      return [
-        { id: consonant.id, kind: "consonant", strokes: buildConsonantStrokes(consonant, style, rng), seed: placeholderSeed, locked: false },
-        {
-          id: `diacritic:${vowel.id}`,
-          kind: "vowelDiacritic",
-          strokes: buildVowelDiacriticStrokes(vowel, style, rng),
+  const glyphs: Glyph[] = (() => {
+    switch (params.scriptCategory) {
+      case "alphabetic":
+      case "abjad": {
+        return phonology.consonants.slice(0, PREVIEW_SAMPLE_COUNT).map((c) => ({
+          id: c.id,
+          kind: "consonant" as const,
+          strokes: buildConsonantStrokes(c, style, geometry, rng),
           seed: placeholderSeed,
           locked: false,
-        },
-      ];
+        }));
+      }
+      case "abugida": {
+        const consonant = phonology.consonants[0];
+        const vowel = phonology.vowels[0];
+        if (!consonant || !vowel) return [];
+        return [
+          {
+            id: consonant.id,
+            kind: "consonant" as const,
+            strokes: buildConsonantStrokes(consonant, style, geometry, rng),
+            seed: placeholderSeed,
+            locked: false,
+          },
+          {
+            id: `diacritic:${vowel.id}`,
+            kind: "vowelDiacritic" as const,
+            strokes: buildVowelDiacriticStrokes(vowel, style, geometry, rng),
+            seed: placeholderSeed,
+            locked: false,
+          },
+        ];
+      }
+      case "syllabic": {
+        const consonantId = phonology.consonants[0]?.id ?? null;
+        return phonology.vowels
+          .slice(0, PREVIEW_SAMPLE_COUNT)
+          .map((v) => buildGlyphForSyllable(consonantId, v.id, phonology, style, previewSeedBase));
+      }
+      case "logographic": {
+        return Array.from({ length: PREVIEW_SAMPLE_COUNT }, (_, i) => ({
+          id: `preview:${i}`,
+          kind: "concept" as const,
+          strokes: buildConceptStrokes(style, geometry, rng),
+          seed: placeholderSeed,
+          locked: false,
+        }));
+      }
     }
-    case "syllabic": {
-      const consonantId = phonology.consonants[0]?.id ?? null;
-      return phonology.vowels
-        .slice(0, PREVIEW_SAMPLE_COUNT)
-        .map((v) => buildGlyphForSyllable(consonantId, v.id, phonology, style, previewSeedBase));
-    }
-    case "logographic": {
-      return Array.from({ length: PREVIEW_SAMPLE_COUNT }, (_, i) => ({
-        id: `preview:${i}`,
-        kind: "concept" as const,
-        strokes: buildConceptStrokes(style, rng),
-        seed: placeholderSeed,
-        locked: false,
-      }));
-    }
-  }
+  })();
+
+  return { style, glyphs };
 }
 
 // --- Attested syllable extraction (Section 8.1's syllabic-category scope) ---
@@ -294,7 +420,14 @@ export function buildGlyphForSyllable(
   const id = syllableGlyphId(consonantId, vowelId);
   const seed: Seed = { base: deriveSeed(seedBase, hashString(id)), variation: 0 };
   const rng = new Rng(deriveSeed(seed.base, seed.variation));
-  return { id, kind: "syllable", strokes: buildSyllableStrokes(consonantId, vowelId, phonology, style, rng), seed, locked: false };
+  const geometry = buildGeometryProfile(style.cornerStyle, seedBase);
+  return {
+    id,
+    kind: "syllable",
+    strokes: buildSyllableStrokes(consonantId, vowelId, phonology, style, geometry, rng),
+    seed,
+    locked: false,
+  };
 }
 
 // --- Glyph-set resolution (per script category, with locked-carryover/nudge-keep) ---
@@ -305,38 +438,63 @@ interface GlyphPlan {
   build: (rng: Rng) => Stroke[];
 }
 
-function alphabeticPlan(phonology: PhonologyData, style: ScriptStyle): GlyphPlan[] {
+function alphabeticPlan(phonology: PhonologyData, style: ScriptStyle, geometry: GeometryProfile): GlyphPlan[] {
   return [
-    ...phonology.consonants.map((c) => ({ id: c.id, kind: "consonant" as const, build: (rng: Rng) => buildConsonantStrokes(c, style, rng) })),
-    ...phonology.vowels.map((v) => ({ id: v.id, kind: "vowel" as const, build: (rng: Rng) => buildVowelStrokes(v, style, rng) })),
-  ];
-}
-
-function abjadPlan(phonology: PhonologyData, style: ScriptStyle): GlyphPlan[] {
-  return phonology.consonants.map((c) => ({ id: c.id, kind: "consonant" as const, build: (rng: Rng) => buildConsonantStrokes(c, style, rng) }));
-}
-
-function abugidaPlan(phonology: PhonologyData, style: ScriptStyle): GlyphPlan[] {
-  return [
-    ...phonology.consonants.map((c) => ({ id: c.id, kind: "consonant" as const, build: (rng: Rng) => buildConsonantStrokes(c, style, rng) })),
+    ...phonology.consonants.map((c) => ({
+      id: c.id,
+      kind: "consonant" as const,
+      build: (rng: Rng) => buildConsonantStrokes(c, style, geometry, rng),
+    })),
     ...phonology.vowels.map((v) => ({
-      id: `diacritic:${v.id}`,
-      kind: "vowelDiacritic" as const,
-      build: (rng: Rng) => buildVowelDiacriticStrokes(v, style, rng),
+      id: v.id,
+      kind: "vowel" as const,
+      build: (rng: Rng) => buildVowelStrokes(v, style, geometry, rng),
     })),
   ];
 }
 
-function syllabicPlan(phonology: PhonologyData, lexiconItems: LexiconItemData[], style: ScriptStyle): GlyphPlan[] {
-  return extractAttestedSyllables(lexiconItems, phonology).map(({ consonantId, vowelId }) => ({
-    id: syllableGlyphId(consonantId, vowelId),
-    kind: "syllable" as const,
-    build: (rng: Rng) => buildSyllableStrokes(consonantId, vowelId, phonology, style, rng),
+function abjadPlan(phonology: PhonologyData, style: ScriptStyle, geometry: GeometryProfile): GlyphPlan[] {
+  return phonology.consonants.map((c) => ({
+    id: c.id,
+    kind: "consonant" as const,
+    build: (rng: Rng) => buildConsonantStrokes(c, style, geometry, rng),
   }));
 }
 
-function logographicPlan(lexiconItems: LexiconItemData[], style: ScriptStyle): GlyphPlan[] {
-  return lexiconItems.map((item) => ({ id: item.id, kind: "concept" as const, build: (rng: Rng) => buildConceptStrokes(style, rng) }));
+function abugidaPlan(phonology: PhonologyData, style: ScriptStyle, geometry: GeometryProfile): GlyphPlan[] {
+  return [
+    ...phonology.consonants.map((c) => ({
+      id: c.id,
+      kind: "consonant" as const,
+      build: (rng: Rng) => buildConsonantStrokes(c, style, geometry, rng),
+    })),
+    ...phonology.vowels.map((v) => ({
+      id: `diacritic:${v.id}`,
+      kind: "vowelDiacritic" as const,
+      build: (rng: Rng) => buildVowelDiacriticStrokes(v, style, geometry, rng),
+    })),
+  ];
+}
+
+function syllabicPlan(
+  phonology: PhonologyData,
+  lexiconItems: LexiconItemData[],
+  style: ScriptStyle,
+  geometry: GeometryProfile,
+): GlyphPlan[] {
+  return extractAttestedSyllables(lexiconItems, phonology).map(({ consonantId, vowelId }) => ({
+    id: syllableGlyphId(consonantId, vowelId),
+    kind: "syllable" as const,
+    build: (rng: Rng) => buildSyllableStrokes(consonantId, vowelId, phonology, style, geometry, rng),
+  }));
+}
+
+function logographicPlan(lexiconItems: LexiconItemData[], style: ScriptStyle, geometry: GeometryProfile): GlyphPlan[] {
+  return lexiconItems.map((item) => ({
+    id: item.id,
+    kind: "concept" as const,
+    build: (rng: Rng) => buildConceptStrokes(style, geometry, rng),
+  }));
 }
 
 function resolveGlyphs(
@@ -422,20 +580,25 @@ export function generateOrthography(args: GenerateOrthographyArgs): OrthographyS
 
   // A nudge never touches the shared grid — only reroll/param-change does,
   // so mid-script "flavor" tweaks never fight the script's own coherence.
-  const scriptStyle = mode === "nudge" && previous ? previous.scriptStyle : buildScriptStyle(params.aesthetic);
+  const scriptStyle = mode === "nudge" && previous ? previous.scriptStyle : buildScriptStyle(params.aesthetic, seed.base);
+  // Geometry is a pure function of (cornerStyle, seed.base), and nudge keeps
+  // seed.base fixed (only variation advances) — so this stays stable across
+  // nudges for the same reason scriptStyle does, without needing its own
+  // nudge/reroll branch.
+  const geometry = buildGeometryProfile(scriptStyle.cornerStyle, seed.base);
 
   const previousGlyphsById = new Map((previous?.glyphs ?? []).map((g) => [g.id, g] as const));
 
   const plan: GlyphPlan[] =
     params.scriptCategory === "alphabetic"
-      ? alphabeticPlan(phonology, scriptStyle)
+      ? alphabeticPlan(phonology, scriptStyle, geometry)
       : params.scriptCategory === "abjad"
-        ? abjadPlan(phonology, scriptStyle)
+        ? abjadPlan(phonology, scriptStyle, geometry)
         : params.scriptCategory === "abugida"
-          ? abugidaPlan(phonology, scriptStyle)
+          ? abugidaPlan(phonology, scriptStyle, geometry)
           : params.scriptCategory === "syllabic"
-            ? syllabicPlan(phonology, lexiconItems, scriptStyle)
-            : logographicPlan(lexiconItems, scriptStyle);
+            ? syllabicPlan(phonology, lexiconItems, scriptStyle, geometry)
+            : logographicPlan(lexiconItems, scriptStyle, geometry);
 
   const glyphs = resolveGlyphs(plan, seed, previousGlyphsById, mode, rng, keepProbability);
   const mapping = buildMapping(params.scriptCategory, glyphs);

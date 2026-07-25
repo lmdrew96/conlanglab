@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { DEFAULT_ORTHOGRAPHY_PARAMS, sampleGlyphs } from "./engine";
-import type { Glyph, OrthographyParams } from "./engine";
+import type { Glyph, OrthographyParams, ScriptStyle } from "./engine";
 import type { PhonologyData } from "@/lib/phonology/engine";
 
 /**
@@ -22,12 +22,12 @@ export function useOrthographyDraft(committedParams: OrthographyParams | null | 
     setDraftParams(committedParams);
   }
 
-  const preview = useMemo<Glyph[]>(() => {
-    if (!phonology) return [];
+  const { style: previewStyle, glyphs: preview } = useMemo<{ style: ScriptStyle | null; glyphs: Glyph[] }>(() => {
+    if (!phonology) return { style: null, glyphs: [] };
     return sampleGlyphs(draftParams, phonology, seedBase);
   }, [draftParams, phonology, seedBase]);
 
   const isDirty = committedParams != null && JSON.stringify(draftParams) !== JSON.stringify(committedParams);
 
-  return { draftParams, setDraftParams, preview, isDirty };
+  return { draftParams, setDraftParams, preview, previewStyle, isDirty };
 }

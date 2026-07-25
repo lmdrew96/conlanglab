@@ -36,19 +36,30 @@ export const AESTHETIC_STYLE_PRESETS: Record<Aesthetic, Omit<ScriptStyle, "versi
   },
 };
 
-/** Manner → allowed stroke-kind pool (Section 14.2's feature-driven determinism: same manner always draws from the same shape family, everywhere it occurs in the script). */
+/**
+ * Manner → allowed stroke-kind pool (Section 14.2's feature-driven
+ * determinism: same manner always draws from the same shape family,
+ * everywhere it occurs in the script). Every manner now includes at least
+ * one geometric kind (line/dot) and one flowing kind (curve/hook), so a
+ * script's per-seed `shapeBias` (generate.ts's GeometryProfile) can
+ * consistently favor blocky/discrete or cursive/flowing shapes across the
+ * *whole* inventory — giving two scripts of the same aesthetic a distinct
+ * "typeface" identity — while the allowed pool itself never changes, so
+ * "same manner → same family" coherence is untouched; only which member of
+ * that family gets favored shifts per script.
+ */
 export const STROKE_FAMILY_BY_MANNER: Record<ConsonantManner, Stroke["kind"][]> = {
-  stop: ["line"],
+  stop: ["line", "hook"],
   nasal: ["hook", "dot"],
-  fricative: ["curve"],
+  fricative: ["curve", "line"],
   affricate: ["line", "curve"],
-  approximant: ["curve", "hook"],
+  approximant: ["curve", "hook", "line"],
   lateralApproximant: ["line", "hook"],
-  trill: ["hook"],
+  trill: ["hook", "line"],
   tap: ["hook", "line"],
-  lateralFricative: ["curve", "hook"],
-  click: ["dot", "line"],
-  ejective: ["line", "dot"],
+  lateralFricative: ["curve", "hook", "dot"],
+  click: ["dot", "line", "hook"],
+  ejective: ["line", "dot", "curve"],
   implosive: ["curve", "dot"],
 };
 

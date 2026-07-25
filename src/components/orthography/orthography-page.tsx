@@ -59,7 +59,7 @@ export function OrthographyPage({ languageId }: { languageId: Id<"languages"> })
     [morphologyData, phonologyData],
   );
 
-  const { draftParams, setDraftParams, preview, isDirty } = useOrthographyDraft(
+  const { draftParams, setDraftParams, preview, previewStyle, isDirty } = useOrthographyDraft(
     committed?.params,
     phonologyData,
     phonologyData?.seed.base ?? 0,
@@ -181,7 +181,7 @@ export function OrthographyPage({ languageId }: { languageId: Id<"languages"> })
               Choose a script category and aesthetic — glyphs are procedurally generated from your language&apos;s own
               sound inventory, not selected from an existing font.
             </p>
-            <ScriptPickerPanel params={draftParams} onChange={setDraftParams} preview={preview} />
+            <ScriptPickerPanel params={draftParams} onChange={setDraftParams} preview={preview} previewStyle={previewStyle} />
             {lexiconMissing && (
               <p className="text-xs text-accent">
                 {draftParams.scriptCategory === "syllabic" ? "Syllabic" : "Logographic"} scripts key off your generated
@@ -233,7 +233,7 @@ export function OrthographyPage({ languageId }: { languageId: Id<"languages"> })
                 )}
               </div>
 
-              <ScriptPickerPanel params={draftParams} onChange={setDraftParams} preview={preview} />
+              <ScriptPickerPanel params={draftParams} onChange={setDraftParams} preview={preview} previewStyle={previewStyle} />
               {isDirty && (
                 <p className="text-xs text-accent">Script settings changed — apply above to regenerate the glyph set.</p>
               )}

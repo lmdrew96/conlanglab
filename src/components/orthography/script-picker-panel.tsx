@@ -3,28 +3,34 @@
 import { InfoTooltip } from "@/components/info-tooltip";
 import { GlyphSvg } from "@/components/orthography/glyph-svg";
 import { aestheticInfo, formatAesthetic, formatScriptCategory, scriptCategoryInfo } from "@/lib/orthography/format";
-import { AESTHETICS, SCRIPT_CATEGORIES, buildScriptStyle } from "@/lib/orthography/engine";
-import type { Glyph, OrthographyParams } from "@/lib/orthography/engine";
+import { AESTHETICS, SCRIPT_CATEGORIES } from "@/lib/orthography/engine";
+import type { Glyph, OrthographyParams, ScriptStyle } from "@/lib/orthography/engine";
 
 /**
  * Pre-generation picker for Section 9.5's two Orthography knobs. Both axes
  * are discrete/categorical, so — unlike a continuous slider — every option
  * is shown up front rather than dragged toward (same idiom as Syntax's
- * word-order picker). `preview` is the live sample-glyph set for the
- * CURRENTLY selected combination (from useOrthographyDraft), so switching
- * either axis regenerates it immediately with no debounce needed.
+ * word-order picker). `preview`/`previewStyle` are the live sample-glyph set
+ * and its matching ScriptStyle for the CURRENTLY selected combination (both
+ * from useOrthographyDraft), so switching either axis regenerates them
+ * immediately with no debounce needed. `previewStyle` must come from the
+ * same sampleGlyphs call that produced `preview` — ScriptStyle is seed-
+ * derived now (stroke width, count range, connector bar position all vary
+ * per script), so rebuilding a style locally from just `params.aesthetic`
+ * would render these glyphs' baked-in coordinates against a mismatched
+ * viewBox/stroke-width.
  */
 export function ScriptPickerPanel({
   params,
   onChange,
   preview,
+  previewStyle,
 }: {
   params: OrthographyParams;
   onChange: (params: OrthographyParams) => void;
   preview: Glyph[];
+  previewStyle: ScriptStyle | null;
 }) {
-  const style = buildScriptStyle(params.aesthetic);
-
   return (
     <div className="flex flex-col gap-4 rounded-lg border border-border bg-surface p-4">
       <div>
@@ -59,12 +65,12 @@ export function ScriptPickerPanel({
 
       <div>
         <h3 className="mb-2 text-base font-semibold text-text-muted">Preview</h3>
-        {preview.length === 0 ? (
+        {preview.length === 0 || !previewStyle ? (
           <p className="text-xs text-text-muted">Not enough data yet to preview this combination.</p>
         ) : (
           <div className="flex flex-wrap gap-3 rounded-md border border-border bg-bg p-3 text-text">
             {preview.map((glyph) => (
-              <GlyphSvg key={glyph.id} glyph={glyph} style={style} />
+              <GlyphSvg key={glyph.id} glyph={glyph} style={previewStyle} />
             ))}
           </div>
         )}
