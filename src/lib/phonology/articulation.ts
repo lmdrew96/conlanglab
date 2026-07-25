@@ -673,7 +673,14 @@ function scheduleApproximant(cursor: Cursor, phoneme: ConsonantPhoneme): void {
   cursor.time += dur;
 }
 
-function scheduleTapOrTrill(cursor: Cursor, place: ConsonantPlace, manner: ConsonantManner, closeInto: number[], isFinal: boolean): void {
+function scheduleTapOrTrill(
+  cursor: Cursor,
+  place: ConsonantPlace,
+  manner: ConsonantManner,
+  closeInto: number[],
+  isFinal: boolean,
+  opensIntoNasal: boolean,
+): void {
   const pulses = manner === "trill" ? 3 : 1;
   // Closing and opening aren't symmetric (see the comment above
   // scheduleVowel) — an even split meant the reopening half never actually
@@ -714,6 +721,15 @@ function scheduleTapOrTrill(cursor: Cursor, place: ConsonantPlace, manner: Conso
     // settles into `closeInto`, which is REST_SHAPE when nothing follows —
     // holding voicing into that open shape reads as an appended vowel.
     if (isFinal) e.Glottis.isTouched = false;
+    // Real nasal coarticulation is anticipatory — the velum starts lowering
+    // before the nasal consonant's own oral closure even forms, not in sync
+    // with it. Without this, a trill/tap handing directly into a nasal (e.g.
+    // r->n in "burn") sits fully sealed at both the mouth AND the velum,
+    // still voiced, for this entire settle window — a dead end for the
+    // airstream that reads as a creaky "roughness" right before the nasal's
+    // release. Opening the velum here, rather than waiting for the nasal's
+    // own onset step, gives the voiced air somewhere to go immediately.
+    if (opensIntoNasal) e.Tract.velumTarget = 0.4;
   });
   cursor.time += 0.04;
 }
@@ -781,9 +797,11 @@ export function scheduleUnits(units: Array<ConsonantPhoneme | VowelPhoneme>, str
         scheduleApproximant(cursor, unit);
         break;
       case "trill":
-      case "tap":
-        scheduleTapOrTrill(cursor, place, manner, closeInto, isFinal);
+      case "tap": {
+        const opensIntoNasal = next !== undefined && !isVowelUnit(next) && next.features.manner === "nasal";
+        scheduleTapOrTrill(cursor, place, manner, closeInto, isFinal, opensIntoNasal);
         break;
+      }
     }
   }
 
