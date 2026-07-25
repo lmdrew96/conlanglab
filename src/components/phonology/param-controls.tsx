@@ -53,15 +53,13 @@ function SliderControl({
   onChange: (next: number) => void;
 }) {
   return (
-    <div>
-      <div className="mb-1 flex items-center justify-between">
-        <span className="flex items-center gap-1.5 text-sm font-medium text-text">
-          {label}
-          <InfoTooltip text={info} />
-        </span>
-        <span className="text-xs text-text-muted">{Math.round(value * 100)}%</span>
-      </div>
+    <div className="flex flex-col items-center gap-1.5 text-center">
+      <span className="flex items-center gap-1.5 text-sm font-medium text-text">
+        {label}
+        <InfoTooltip text={info} />
+      </span>
       <Dial value={value} onChange={onChange} label={label} />
+      <span className="text-xs text-text-muted">{Math.round(value * 100)}%</span>
     </div>
   );
 }
@@ -117,24 +115,26 @@ export function ParamControls({
         onChange={(vowelInventorySize) => onChange({ ...params, vowelInventorySize })}
       />
 
-      <SliderControl
-        label="Typological strictness"
-        info="Higher = adheres closely to attested cross-linguistic universals. Lower = allows rarer, more speculative sound combinations."
-        value={params.typologicalStrictness}
-        onChange={(typologicalStrictness) => onChange({ ...params, typologicalStrictness })}
-      />
-      <SliderControl
-        label="Cluster complexity"
-        info="How many consonants can stack together at the start or end of a syllable. Higher = larger onset/coda clusters."
-        value={params.clusterComplexity}
-        onChange={(clusterComplexity) => onChange({ ...params, clusterComplexity })}
-      />
-      <SliderControl
-        label="Sonority violation rate"
-        info="By default, clusters rise in sonority toward the vowel and fall away from it (the Sonority Sequencing Principle) for an elegant sound. This deliberately allows harsh, sonority-violating clusters at the given rate instead — 0 means none."
-        value={params.sonorityViolationRate}
-        onChange={(sonorityViolationRate) => onChange({ ...params, sonorityViolationRate })}
-      />
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+        <SliderControl
+          label="Typological strictness"
+          info="Higher = adheres closely to attested cross-linguistic universals. Lower = allows rarer, more speculative sound combinations."
+          value={params.typologicalStrictness}
+          onChange={(typologicalStrictness) => onChange({ ...params, typologicalStrictness })}
+        />
+        <SliderControl
+          label="Cluster complexity"
+          info="How many consonants can stack together at the start or end of a syllable. Higher = larger onset/coda clusters."
+          value={params.clusterComplexity}
+          onChange={(clusterComplexity) => onChange({ ...params, clusterComplexity })}
+        />
+        <SliderControl
+          label="Sonority violation rate"
+          info="By default, clusters rise in sonority toward the vowel and fall away from it (the Sonority Sequencing Principle) for an elegant sound. This deliberately allows harsh, sonority-violating clusters at the given rate instead — 0 means none."
+          value={params.sonorityViolationRate}
+          onChange={(sonorityViolationRate) => onChange({ ...params, sonorityViolationRate })}
+        />
+      </div>
 
       <div className="flex flex-col gap-2">
         <span className="text-sm font-medium text-text">Marked features</span>

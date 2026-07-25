@@ -22,22 +22,22 @@ export function DomainWeightControls({
           included. These dials bias which culture-flavor domains fill the remaining root budget.
         </p>
       </div>
-      {FLEXIBLE_DOMAINS.map((domain) => (
-        <div key={domain}>
-          <div className="mb-1 flex items-center justify-between">
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+        {FLEXIBLE_DOMAINS.map((domain) => (
+          <div key={domain} className="flex flex-col items-center gap-1.5 text-center">
             <span className="flex items-center gap-1.5 text-sm font-medium text-text">
               {formatDomain(domain)}
               <InfoTooltip text={domainInfo(domain)} />
             </span>
+            <Dial
+              value={params.domainWeights[domain]}
+              onChange={(next) => onChange({ ...params, domainWeights: { ...params.domainWeights, [domain]: next } })}
+              label={formatDomain(domain)}
+            />
             <span className="text-xs text-text-muted">{Math.round(params.domainWeights[domain] * 100)}%</span>
           </div>
-          <Dial
-            value={params.domainWeights[domain]}
-            onChange={(next) => onChange({ ...params, domainWeights: { ...params.domainWeights, [domain]: next } })}
-            label={formatDomain(domain)}
-          />
-        </div>
-      ))}
+        ))}
+      </div>
     </div>
   );
 }
