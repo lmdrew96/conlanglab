@@ -3,6 +3,7 @@
 import { useMemo } from "react";
 import { formatAffixForm, formatHumanGloss } from "@/lib/morphology/format";
 import { playRoot } from "@/lib/lexicon/audio";
+import { dedupeAffixesByCategorySignature } from "@/lib/morphology/engine";
 import type { MorphologyAffixData } from "@/lib/morphology/engine";
 import type { LexiconItemData } from "@/lib/lexicon/engine";
 import type { PhonologyData } from "@/lib/phonology/engine";
@@ -61,8 +62,11 @@ export function ExampleWordsPanel({
     const verb = items.find((i) => i.partOfSpeech === "verb");
     if (!noun && !verb) return null;
 
-    const nominalAffixes = affixes.filter((a) => a.domain === "nominal").slice(0, 2);
-    const verbalAffixes = affixes.filter((a) => a.domain === "verbal").slice(0, 2);
+    const nominalAffixes = dedupeAffixesByCategorySignature(affixes.filter((a) => a.domain === "nominal")).slice(
+      0,
+      2,
+    );
+    const verbalAffixes = dedupeAffixesByCategorySignature(affixes.filter((a) => a.domain === "verbal")).slice(0, 2);
 
     return {
       noun: noun

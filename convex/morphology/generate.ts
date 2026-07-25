@@ -49,6 +49,25 @@ function hashString(s: string): number {
   return h >>> 0;
 }
 
+/**
+ * Fusional bundle cells sharing a `categories` set are paradigm alternatives
+ * (e.g. Sg.Subj.Def vs. Sg.Obj.Indef from the same {number,case,definiteness}
+ * bundle) — exactly one applies to a word at a time, never both. Keeps only
+ * the first affix seen per distinct category signature so sampling call
+ * sites never stack mutually-exclusive cells onto one word.
+ */
+export function dedupeAffixesByCategorySignature(affixes: MorphologyAffixData[]): MorphologyAffixData[] {
+  const seen = new Set<string>();
+  const deduped: MorphologyAffixData[] = [];
+  for (const affix of affixes) {
+    const signature = affix.categories.slice().sort().join(",");
+    if (seen.has(signature)) continue;
+    seen.add(signature);
+    deduped.push(affix);
+  }
+  return deduped;
+}
+
 function weightedSampleWithoutReplacement<T>(
   rng: Rng,
   pool: readonly T[],
@@ -368,7 +387,7 @@ export function generateTypologyPreview(
 
   // Up to 3 verbal affixes — enough to show isolating's near-bare output and
   // polysynthetic's stacking without listing every generated category.
-  const verbalItems = items.filter((i) => i.domain === "verbal").slice(0, 3);
+  const verbalItems = dedupeAffixesByCategorySignature(items.filter((i) => i.domain === "verbal")).slice(0, 3);
   const prefixes = verbalItems.filter((i) => i.slot === "prefix");
   const suffixes = verbalItems.filter((i) => i.slot === "suffix");
 

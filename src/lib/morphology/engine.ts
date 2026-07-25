@@ -4,6 +4,7 @@
 
 export {
   buildAffixForm,
+  dedupeAffixesByCategorySignature,
   generateMorphology,
   generateTypologyPreview,
   regenerateSingleItem,
