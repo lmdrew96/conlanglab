@@ -39,7 +39,7 @@ export function LivePreviewPanel({ preview, isDirty }: { preview: PhonologyData 
   return (
     <div className="flex flex-col gap-3 rounded-lg border border-border bg-surface p-4">
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-text-muted">Live preview</h3>
+        <h3 className="text-base font-semibold text-text-muted">Live preview</h3>
         {isDirty && <span className="text-xs text-accent">Unsaved parameter changes</span>}
       </div>
       <div>

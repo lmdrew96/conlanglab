@@ -16,7 +16,7 @@ export function DomainWeightControls({
   return (
     <div className="flex flex-col gap-4 rounded-lg border border-border bg-surface p-4">
       <div>
-        <h3 className="text-sm font-semibold text-text-muted">Domain weighting</h3>
+        <h3 className="text-base font-semibold text-text-muted">Domain weighting</h3>
         <p className="mt-1 text-xs text-text-muted">
           The core list (Swadesh-extended vocabulary, emotions, social roles, technology, objects) is always
           included. These dials bias which culture-flavor domains fill the remaining root budget.

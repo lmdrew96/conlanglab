@@ -12,7 +12,7 @@ export function PhraseRulesPanel({ phraseStructure }: { phraseStructure: PhraseS
   const rules = formatPhraseRules(phraseStructure);
   return (
     <div className="flex flex-col gap-3 rounded-lg border border-border bg-surface p-4">
-      <h3 className="text-sm font-semibold text-text-muted">Phrase structure rules</h3>
+      <h3 className="text-base font-semibold text-text-muted">Phrase structure rules</h3>
       <ul className="flex flex-col gap-1 text-sm text-text">
         {rules.map((rule) => (
           <li key={rule} className="font-mono">

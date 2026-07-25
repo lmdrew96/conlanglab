@@ -67,7 +67,7 @@ export function InventoryGrid({
   return (
     <div className="flex flex-col gap-4 rounded-lg border border-border bg-surface p-4">
       <div>
-        <h3 className="mb-2 text-sm font-semibold text-text-muted">Consonants ({data.consonants.length})</h3>
+        <h3 className="mb-2 text-base font-semibold text-text-muted">Consonants ({data.consonants.length})</h3>
         <div className="flex flex-wrap gap-1.5">
           {data.consonants.map((c) => (
             <PhonemeChip
@@ -85,7 +85,7 @@ export function InventoryGrid({
         </div>
       </div>
       <div>
-        <h3 className="mb-2 text-sm font-semibold text-text-muted">Vowels ({data.vowels.length})</h3>
+        <h3 className="mb-2 text-base font-semibold text-text-muted">Vowels ({data.vowels.length})</h3>
         <div className="flex flex-wrap gap-1.5">
           {data.vowels.map((v) => (
             <PhonemeChip

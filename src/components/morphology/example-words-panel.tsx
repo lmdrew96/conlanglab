@@ -67,7 +67,7 @@ export function ExampleWordsPanel({
 
   return (
     <div className="flex flex-col gap-3 rounded-lg border border-border bg-surface p-4">
-      <h3 className="text-sm font-semibold text-text-muted">Example words from your lexicon</h3>
+      <h3 className="text-base font-semibold text-text-muted">Example words from your lexicon</h3>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         {example.noun && (
           <div>

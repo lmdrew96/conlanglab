@@ -21,7 +21,7 @@ export function LivePreviewPanel({
   return (
     <div className="rounded-lg border border-border bg-surface p-4">
       <div className="mb-2 flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-text-muted">Live preview</h3>
+        <h3 className="text-base font-semibold text-text-muted">Live preview</h3>
         {isDirty && <span className="text-xs text-accent">Unsaved slider changes — commit to apply</span>}
       </div>
       {preview.length === 0 ? (

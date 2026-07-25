@@ -17,7 +17,7 @@ export function HistorySidebar({ languageId, stageLocked }: { languageId: Id<"la
 
   return (
     <div className="flex flex-col gap-2 rounded-lg border border-border bg-surface p-4">
-      <h3 className="text-sm font-semibold text-text-muted">History</h3>
+      <h3 className="text-base font-semibold text-text-muted">History</h3>
       {history === undefined && <p className="text-xs text-text-muted">Loading...</p>}
       {history?.length === 0 && <p className="text-xs text-text-muted">No changes yet.</p>}
       <ul className="flex max-h-80 flex-col gap-1 overflow-y-auto">

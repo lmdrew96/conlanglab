@@ -49,7 +49,7 @@ export function SuprasegmentalControls({
     <div className="flex flex-col gap-4 rounded-lg border border-border bg-surface p-4">
       <div>
         <div className="mb-1 flex items-center justify-between">
-          <h3 className="flex items-center gap-1.5 text-sm font-semibold text-text-muted">
+          <h3 className="flex items-center gap-1.5 text-base font-semibold text-text-muted">
             Stress
             <InfoTooltip text="Which syllable gets emphasized when the word is spoken — a fixed position (first, last, second-to-last) or weight-sensitive, where syllables with a coda consonant attract stress." />
           </h3>
@@ -75,7 +75,7 @@ export function SuprasegmentalControls({
 
       <div>
         <div className="mb-1 flex items-center justify-between">
-          <h3 className="flex items-center gap-1.5 text-sm font-semibold text-text-muted">
+          <h3 className="flex items-center gap-1.5 text-base font-semibold text-text-muted">
             Tone
             <InfoTooltip text="An optional pitch contrast that changes word meaning, like Mandarin's four tones. Levels are the number of contrastive pitches; contours add rising/falling pitch shapes on top of level tones." />
           </h3>
