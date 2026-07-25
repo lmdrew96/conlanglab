@@ -33,6 +33,12 @@ import type * as phonology_mutations from "../phonology/mutations.js";
 import type * as phonology_queries from "../phonology/queries.js";
 import type * as phonology_sonority from "../phonology/sonority.js";
 import type * as phonology_types from "../phonology/types.js";
+import type * as syntax_content from "../syntax/content.js";
+import type * as syntax_diff from "../syntax/diff.js";
+import type * as syntax_generate from "../syntax/generate.js";
+import type * as syntax_mutations from "../syntax/mutations.js";
+import type * as syntax_queries from "../syntax/queries.js";
+import type * as syntax_types from "../syntax/types.js";
 
 import type {
   ApiFromModules,
@@ -66,6 +72,12 @@ declare const fullApi: ApiFromModules<{
   "phonology/queries": typeof phonology_queries;
   "phonology/sonority": typeof phonology_sonority;
   "phonology/types": typeof phonology_types;
+  "syntax/content": typeof syntax_content;
+  "syntax/diff": typeof syntax_diff;
+  "syntax/generate": typeof syntax_generate;
+  "syntax/mutations": typeof syntax_mutations;
+  "syntax/queries": typeof syntax_queries;
+  "syntax/types": typeof syntax_types;
 }>;
 
 /**

@@ -228,8 +228,22 @@ const CONTEXT_SCHWA: VowelPhoneme = {
   locked: false,
 };
 
-async function play(units: Array<ConsonantPhoneme | VowelPhoneme>, stressedIndex?: number): Promise<void> {
-  const { steps, noiseEvents } = scheduleUnits(units, stressedIndex);
+/**
+ * Bumped by every entry point below that starts a new gesture sequence
+ * (single phoneme, single word/cluster, or the next word of a
+ * playWordSequence loop) — playWordSequence checks this between words so
+ * a superseded multi-word loop stops scheduling further words instead of
+ * fighting a newer click for the single shared voice (see
+ * pink-trombone-engine.ts's "single continuous voice" file header).
+ */
+let currentPlayId = 0;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function play(units: Array<ConsonantPhoneme | VowelPhoneme>, stressedIndex?: number): Promise<number> {
+  const { steps, noiseEvents, totalDuration } = scheduleUnits(units, stressedIndex);
   const engine = await runGestures(steps);
   const ctx = engine.AudioSystem.audioContext;
   // ctx.destination, not scriptProcessor — the processor treats its inputs
@@ -247,20 +261,52 @@ async function play(units: Array<ConsonantPhoneme | VowelPhoneme>, stressedIndex
       if (event.voiced) playVoiceHum(ctx, dest, startAt + event.atOffset, event.dur);
     }
   }
+  return totalDuration;
 }
 
 /** Play a single phoneme (consonant or vowel) immediately. A vowel plays alone; a consonant gets a trailing neutral vowel so the ear hears a real articulatory release instead of an isolated burst. */
 export function playPhoneme(phoneme: ConsonantPhoneme | VowelPhoneme): void {
+  currentPlayId++;
   const isVowel = "height" in phoneme.features;
   void play(isVowel ? [phoneme] : [phoneme, CONTEXT_SCHWA]);
 }
 
 /** Play a sampled syllable or root (always contains at least one real vowel). `stressedIndex` (absolute index into `phonemes`) marks the primary-stressed vowel — see scheduleUnits for how it affects timing/pitch. */
 export function playSequence(phonemes: Array<ConsonantPhoneme | VowelPhoneme>, stressedIndex?: number): void {
+  currentPlayId++;
   void play(phonemes, stressedIndex);
 }
 
 /** Play a bare onset/coda cluster preview — these have no real vowel (see sampleClusters), so a neutral vowel is attached at the edge adjacent to where a syllable nucleus would sit. */
 export function playCluster(phonemes: ConsonantPhoneme[], position: "onset" | "coda"): void {
+  currentPlayId++;
   void play(position === "onset" ? [...phonemes, CONTEXT_SCHWA] : [CONTEXT_SCHWA, ...phonemes]);
+}
+
+/** Seconds of silence between words in playWordSequence — long enough to read as a word boundary, short enough to still sound like one utterance. */
+const WORD_GAP_SECONDS = 0.15;
+
+/**
+ * Play multiple word-sequences back to back — the first time this engine
+ * plays more than one word as a single utterance (Section 7's example
+ * sentences). Same single-voice constraint as every other function here:
+ * a newer playPhoneme/playSequence/playCluster/playWordSequence call bumps
+ * currentPlayId, and this loop checks it between words so a superseded
+ * sentence stops scheduling further words instead of fighting a newer
+ * click for the voice — plain interruption (like any two rapid single-word
+ * clicks already do) isn't enough on its own because this loop's own
+ * `await`s would otherwise keep firing more `play()` calls afterward.
+ * Resolves true if every word played to completion, false if superseded.
+ */
+export async function playWordSequence(
+  words: Array<{ phonemes: Array<ConsonantPhoneme | VowelPhoneme>; stressedIndex?: number }>,
+): Promise<boolean> {
+  const playId = ++currentPlayId;
+  for (const word of words) {
+    if (playId !== currentPlayId) return false;
+    const duration = await play(word.phonemes, word.stressedIndex);
+    if (playId !== currentPlayId) return false;
+    await sleep((duration + WORD_GAP_SECONDS) * 1000);
+  }
+  return true;
 }

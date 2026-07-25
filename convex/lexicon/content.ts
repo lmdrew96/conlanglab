@@ -90,6 +90,13 @@ export const CORE_LIST: CoreConcept[] = [
     ["because", "because", "function"],
     ["all", "all", "function"],
     ["some", "some", "function"],
+    // Adpositions — needed by Syntax (M5) for adpositional-phrase examples;
+    // not part of the original core list.
+    ["in", "in", "function"],
+    ["on", "on", "function"],
+    ["to", "to", "function"],
+    ["from", "from", "function"],
+    ["with", "with", "function"],
     ["many", "many", "adjective"],
     ["few", "few", "adjective"],
     ["other", "other", "adjective"],
