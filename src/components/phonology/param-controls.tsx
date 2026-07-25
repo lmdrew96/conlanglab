@@ -1,6 +1,7 @@
 "use client";
 
 import { InfoTooltip } from "@/components/info-tooltip";
+import { Dial } from "@/components/dial";
 import type { InventorySize, PhonologyParams } from "@/lib/phonology/engine";
 
 const SIZE_OPTIONS: InventorySize[] = ["small", "medium", "large"];
@@ -60,15 +61,7 @@ function SliderControl({
         </span>
         <span className="text-xs text-text-muted">{Math.round(value * 100)}%</span>
       </div>
-      <input
-        type="range"
-        min={0}
-        max={1}
-        step={0.05}
-        value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
-        className="w-full accent-[color:var(--color-accent)]"
-      />
+      <Dial value={value} onChange={onChange} label={label} />
     </div>
   );
 }

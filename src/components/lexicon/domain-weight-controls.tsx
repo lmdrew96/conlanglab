@@ -1,6 +1,7 @@
 "use client";
 
 import { InfoTooltip } from "@/components/info-tooltip";
+import { Dial } from "@/components/dial";
 import { FLEXIBLE_DOMAINS } from "@/lib/lexicon/engine";
 import { domainInfo, formatDomain } from "@/lib/lexicon/format";
 import type { LexiconParams } from "@/lib/lexicon/engine";
@@ -18,7 +19,7 @@ export function DomainWeightControls({
         <h3 className="text-sm font-semibold text-text-muted">Domain weighting</h3>
         <p className="mt-1 text-xs text-text-muted">
           The core list (Swadesh-extended vocabulary, emotions, social roles, technology, objects) is always
-          included. These sliders bias which culture-flavor domains fill the remaining root budget.
+          included. These dials bias which culture-flavor domains fill the remaining root budget.
         </p>
       </div>
       {FLEXIBLE_DOMAINS.map((domain) => (
@@ -30,16 +31,10 @@ export function DomainWeightControls({
             </span>
             <span className="text-xs text-text-muted">{Math.round(params.domainWeights[domain] * 100)}%</span>
           </div>
-          <input
-            type="range"
-            min={0}
-            max={1}
-            step={0.05}
+          <Dial
             value={params.domainWeights[domain]}
-            onChange={(e) =>
-              onChange({ ...params, domainWeights: { ...params.domainWeights, [domain]: Number(e.target.value) } })
-            }
-            className="w-full accent-[color:var(--color-accent)]"
+            onChange={(next) => onChange({ ...params, domainWeights: { ...params.domainWeights, [domain]: next } })}
+            label={formatDomain(domain)}
           />
         </div>
       ))}
