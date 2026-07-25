@@ -6,6 +6,7 @@ import type { Id } from "../../../convex/_generated/dataModel";
 import type { PhonologyData, StressPattern } from "@/lib/phonology/engine";
 import { formatStressPattern } from "@/lib/phonology/format";
 import { InfoTooltip } from "@/components/info-tooltip";
+import { LockIcon } from "@/components/icons";
 
 const STRESS_PATTERNS: StressPattern[] = ["initial", "penultimate", "final", "weightSensitive", "none"];
 
@@ -17,7 +18,13 @@ function LockButton({ locked, disabled, onClick }: { locked: boolean; disabled: 
       disabled={disabled}
       className="text-xs text-text-muted hover:text-text disabled:cursor-not-allowed disabled:opacity-60"
     >
-      {locked ? "🔒 Locked" : "Lock"}
+      {locked ? (
+        <span className="inline-flex items-center gap-1">
+          <LockIcon className="h-3 w-3" /> Locked
+        </span>
+      ) : (
+        "Lock"
+      )}
     </button>
   );
 }

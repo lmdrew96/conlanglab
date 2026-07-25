@@ -5,6 +5,7 @@ import { useMutation } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import { formatPartOfSpeech } from "@/lib/lexicon/format";
 import { playRoot } from "@/lib/lexicon/audio";
+import { SpeakerIcon } from "@/components/icons";
 import type { LexiconItemData, PartOfSpeech } from "@/lib/lexicon/engine";
 import type { PhonologyData } from "@/lib/phonology/engine";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
@@ -143,7 +144,7 @@ export function RootsTable({
                         title={row.staleSince != null ? "Regenerate to hear pronunciation" : `Play /${data.phonologicalForm}/`}
                         className="hover:text-accent disabled:cursor-not-allowed disabled:opacity-30"
                       >
-                        <span aria-hidden>🔊</span>
+                        <SpeakerIcon className="h-3 w-3" />
                       </button>
                       {data.phonologicalForm}
                     </span>

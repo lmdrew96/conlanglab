@@ -5,6 +5,7 @@ import { useMutation } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import { formatAffixForm, formatCategoryList, formatDomain, formatHumanGloss } from "@/lib/morphology/format";
 import { playAffix } from "@/lib/morphology/audio";
+import { SpeakerIcon } from "@/components/icons";
 import type { GrammaticalDomain, MorphologyAffixData } from "@/lib/morphology/engine";
 import type { PhonologyData } from "@/lib/phonology/engine";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
@@ -121,7 +122,7 @@ export function AffixTable({
                         title={row.staleSince != null ? "Regenerate to hear pronunciation" : `Play /${data.form}/`}
                         className="hover:text-accent disabled:cursor-not-allowed disabled:opacity-30"
                       >
-                        <span aria-hidden>🔊</span>
+                        <SpeakerIcon className="h-3 w-3" />
                       </button>
                       {formatAffixForm(data)}
                     </span>

@@ -6,6 +6,7 @@ import type { Id } from "../../../convex/_generated/dataModel";
 import type { ConsonantPhoneme, PhonologyData, VowelPhoneme } from "@/lib/phonology/engine";
 import { formatManner, formatPlace } from "@/lib/phonology/format";
 import { playPhoneme } from "@/lib/phonology/audio";
+import { LockIcon, SpeakerIcon } from "@/components/icons";
 
 function PhonemeChip({
   phoneme,
@@ -36,7 +37,7 @@ function PhonemeChip({
         title={`Play /${ipa}/`}
         className="rounded-l-md py-1 pl-2 pr-0.5 hover:text-accent"
       >
-        <span aria-hidden>🔊</span>
+        <SpeakerIcon className="h-3 w-3" />
       </button>
       <button
         type="button"
@@ -46,7 +47,7 @@ function PhonemeChip({
         className="flex items-center gap-1 rounded-r-md py-1 pl-0.5 pr-2 disabled:cursor-not-allowed disabled:opacity-60"
       >
         <span className="font-mono">{ipa}</span>
-        {locked && <span aria-hidden>🔒</span>}
+        {locked && <LockIcon className="h-3 w-3" />}
       </button>
     </span>
   );

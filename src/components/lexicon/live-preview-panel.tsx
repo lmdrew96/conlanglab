@@ -2,6 +2,7 @@
 
 import { formatDomain, formatPartOfSpeech } from "@/lib/lexicon/format";
 import { playRoot } from "@/lib/lexicon/audio";
+import { SpeakerIcon } from "@/components/icons";
 import type { FlexibleDomain, LexiconItemData } from "@/lib/lexicon/engine";
 import type { PhonologyData } from "@/lib/phonology/engine";
 
@@ -33,7 +34,7 @@ export function LivePreviewPanel({
                   title={`Play /${item.phonologicalForm}/`}
                   className="hover:text-accent"
                 >
-                  <span aria-hidden>🔊</span>
+                  <SpeakerIcon className="h-3 w-3" />
                 </button>
                 {item.phonologicalForm}
               </span>

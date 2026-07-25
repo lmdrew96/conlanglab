@@ -6,6 +6,7 @@ import { useConvexAuth, useMutation, useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { Header } from "@/components/header";
+import { LockIcon } from "@/components/icons";
 import { ParamControls } from "@/components/phonology/param-controls";
 import { InventoryGrid } from "@/components/phonology/inventory-grid";
 import { SuprasegmentalControls } from "@/components/phonology/suprasegmental-controls";
@@ -114,7 +115,13 @@ export function PhonologyPage({ languageId }: { languageId: Id<"languages"> }) {
                 onClick={() => (stageLocked ? unlockStage({ languageId }) : lockStage({ languageId }))}
                 className="rounded-md border border-border px-3 py-1.5 text-sm text-text-muted hover:text-text"
               >
-                {stageLocked ? "🔒 Locked — unlock stage" : "Lock stage"}
+                {stageLocked ? (
+                  <span className="inline-flex items-center gap-1">
+                    <LockIcon className="h-3.5 w-3.5" /> Locked — unlock stage
+                  </span>
+                ) : (
+                  "Lock stage"
+                )}
               </button>
             )}
           </div>
