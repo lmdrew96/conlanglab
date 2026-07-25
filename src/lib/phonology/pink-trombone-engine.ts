@@ -39,6 +39,16 @@ export interface PinkTromboneModule {
     vibratoAmount: number;
     /** Ramps toward 0 at ~0.05/block (≈230ms) when not touched — far slower than most consonant durations, so voiceless segments must zero this directly rather than rely on decay (see articulation.ts). */
     intensity: number;
+    /** Resolved per-glottal-cycle pitch (Hz), set by setupWaveform from the block-rate oldFrequency/newFrequency crossfade. */
+    frequency: number;
+    /** 1/frequency — read by runStep to detect the next cycle boundary. */
+    waveformLength: number;
+    /** Seconds since this voice started; the vendor's own vibrato uses it as a phase clock, and so does our jitter/shimmer wrapper (see attachCycleNaturalness). */
+    totalTime: number;
+    /** Pure per-cycle output multiplier, declared by the vendor but never otherwise written to — repurposed by attachCycleNaturalness as the shimmer/energy-drift hook. */
+    loudness: number;
+    /** Vendor per-cycle hook, called fresh every time a new glottal pulse begins — wrapped by attachCycleNaturalness to layer in jitter/shimmer the vendor doesn't otherwise provide. */
+    setupWaveform: (lambda: number) => void;
   };
   Tract: {
     n: number;
@@ -47,6 +57,41 @@ export interface PinkTromboneModule {
     targetDiameter: Float64Array;
     velumTarget: number;
     movementSpeed: number;
+  };
+}
+
+// The vendor engine's own "vibrato" (Glottis.finishBlock, block-rate) is a
+// slow correlated wander — a sinusoid plus simplex noise sampled at slow
+// time-scales, so adjacent cycles drift together. That reads as vibrato, not
+// jitter/shimmer: real jitter/shimmer is independent, roughly uncorrelated
+// variation from ONE glottal cycle to the NEXT, which needs a hook at cycle
+// granularity. setupWaveform is that hook (the vendor calls it fresh every
+// time a new pulse begins, from Glottis.runStep) — nothing else outside its
+// closed per-sample loop runs at the right rate. Amounts are deliberately
+// small: research on synthetic voice naturalness ratings, and the zakaton
+// fork this project has referenced before for other tuning (Tangle
+// project:conlanglab / topic:pink-trombone), both note that too much
+// shimmer/jitter reads as harsh/pathological, while zero reads as dead — a
+// pure tone with no cycle-to-cycle variation is exactly what a sustained
+// vowel test isn't supposed to sound like.
+const JITTER_AMOUNT = 0.006; // ~0.6% of the period, independent per cycle
+const SHIMMER_AMOUNT = 0.025; // ~2.5% amplitude, independent per cycle
+const ENERGY_DRIFT_AMOUNT = 0.04; // slow overall loudness wander, on top of shimmer
+const ENERGY_DRIFT_HZ = 0.3;
+
+function attachCycleNaturalness(engine: PinkTromboneModule): void {
+  const glottis = engine.Glottis;
+  const original = glottis.setupWaveform.bind(glottis);
+  glottis.setupWaveform = (lambda: number) => {
+    original(lambda);
+    // Re-perturb frequency AFTER the vendor's own smooth block-rate value is
+    // set, so this jitter doesn't get smoothed away with it — each cycle
+    // gets its own independent nudge instead of inheriting the previous
+    // cycle's.
+    glottis.frequency *= 1 + JITTER_AMOUNT * (Math.random() * 2 - 1);
+    glottis.waveformLength = 1 / glottis.frequency;
+    const energyDrift = 1 + ENERGY_DRIFT_AMOUNT * Math.sin(2 * Math.PI * glottis.totalTime * ENERGY_DRIFT_HZ);
+    glottis.loudness = energyDrift * (1 + SHIMMER_AMOUNT * (Math.random() * 2 - 1));
   };
 }
 
@@ -73,6 +118,7 @@ function loadEngine(): Promise<PinkTromboneModule> {
       engine.AudioSystem.scriptProcessor.connect(masterGain);
       masterGain.connect(engine.AudioSystem.audioContext.destination);
       engine.AudioSystem.masterGain = masterGain;
+      attachCycleNaturalness(engine);
       return engine;
     });
   }
