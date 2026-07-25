@@ -7,9 +7,7 @@ export function Header() {
   return (
     <header className="flex items-center justify-between border-b border-border px-6 py-4">
       <Link href="/" className="text-lg font-semibold text-text">
-        <RotaryTitle>
-          CLL <span className="text-text-muted">— ConLangLab</span>
-        </RotaryTitle>
+        <RotaryTitle>ConLangLab</RotaryTitle>
       </Link>
       <div className="flex items-center gap-3">
         <ThemeSwitcher />

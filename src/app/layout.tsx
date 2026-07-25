@@ -22,7 +22,7 @@ const inLivingColor = localFont({
 });
 
 export const metadata: Metadata = {
-  title: "CLL — ConLangLab",
+  title: "ConLangLab",
   description: "Generate complete, internally-consistent constructed languages from real linguistic typology.",
 };
 

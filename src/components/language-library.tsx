@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useConvexAuth, useMutation, useQuery } from "convex/react";
 import Link from "next/link";
 import { api } from "../../convex/_generated/api";
+import { inLivingColor } from "@/lib/title-fonts";
 
 export function LanguageLibrary() {
   const { isAuthenticated } = useConvexAuth();
@@ -65,7 +66,7 @@ export function LanguageLibrary() {
             className="flex items-center justify-between rounded-md border border-border bg-surface px-4 py-3 hover:bg-surface-hover"
           >
             <Link href={`/language/${lang._id}`} className="flex-1">
-              <span className="font-medium text-text">{lang.name}</span>
+              <span className={`${inLivingColor.className} text-xl font-medium text-text`}>{lang.name}</span>
               <span className="ml-2 text-xs text-text-muted">
                 {Object.values(lang.lockedStages).filter(Boolean).length} stage(s) locked
               </span>
