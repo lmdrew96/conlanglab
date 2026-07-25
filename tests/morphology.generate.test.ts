@@ -119,10 +119,10 @@ describe("fusional bundling (Section 5.4's typology, applied to baseline affixat
   });
 });
 
-describe("prefix/suffix strategy is consistent within a category (Section 5.2's baseline)", () => {
+describe("affix strategy is consistent within a category (Section 5.2)", () => {
   const phonology = testPhonology(42);
 
-  it("every standalone affix of the same category shares the same slot", () => {
+  it("every standalone affix of the same category shares the same strategy", () => {
     for (let seed = 1; seed <= 8; seed++) {
       const { items } = generateInitial(seed, phonology, "agglutinative");
       const byCategory = new Map<string, Set<string>>();
@@ -130,9 +130,9 @@ describe("prefix/suffix strategy is consistent within a category (Section 5.2's 
         if (item.categories.length !== 1) continue;
         const cat = item.categories[0];
         if (!byCategory.has(cat)) byCategory.set(cat, new Set());
-        byCategory.get(cat)!.add(item.slot);
+        byCategory.get(cat)!.add(item.strategy);
       }
-      for (const slots of byCategory.values()) expect(slots.size).toBe(1);
+      for (const strategies of byCategory.values()) expect(strategies.size).toBe(1);
     }
   });
 });
@@ -172,7 +172,7 @@ describe("locking and item-level regeneration", () => {
     });
 
     expect(updated.id).toBe(target.id);
-    expect(updated.slot).toBe(target.slot);
+    expect(updated.strategy).toBe(target.strategy);
     expect(updated.domain).toBe(target.domain);
     expect(updated.categories).toEqual(target.categories);
     expect(updated.values).toEqual(target.values);

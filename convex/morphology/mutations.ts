@@ -4,11 +4,12 @@ import { requireLanguageOwner } from "../lib/auth";
 import { appendHistory, reconstructAt } from "../lib/history";
 import { freshSeed } from "../lib/rng";
 import { diffMorphology } from "./diff";
-import { generateMorphology, regenerateSingleItem } from "./generate";
+import { buildAllomorphy, generateMorphology, regenerateSingleItem } from "./generate";
 import { DEFAULT_MORPHOLOGY_PARAMS } from "./types";
 import type { MorphologySnapshot } from "./diff";
 import type { MorphologyAffixData, MorphologyStageData } from "./types";
 import type { PhonologyData } from "../phonology/types";
+import type { LexiconItemData } from "../lexicon/types";
 import type { MutationCtx } from "../_generated/server";
 import type { Doc, Id } from "../_generated/dataModel";
 
@@ -46,8 +47,24 @@ async function listItemRows(ctx: MutationCtx, languageId: Id<"languages">) {
     .collect();
 }
 
+/** Read-only lookup — Lexicon (M2) generates before Morphology in the pipeline (design doc roadmap §15), so its roots are already available for suppletion's Tier-A root selection (Section 5.2). Empty if Lexicon hasn't been generated yet, same graceful-degradation the phonology lookup doesn't need since Morphology already requires Phonology first. */
+async function getLexiconItems(ctx: MutationCtx, languageId: Id<"languages">): Promise<LexiconItemData[]> {
+  const rows = await ctx.db
+    .query("lexiconItems")
+    .withIndex("by_language", (q) => q.eq("languageId", languageId))
+    .collect();
+  return rows.map((r) => r.data as LexiconItemData).filter(Boolean);
+}
+
 function snapshotOf(items: MorphologyAffixData[], stage: MorphologyStageData): MorphologySnapshot {
-  return { items, params: stage.params, seed: stage.seed, selectedCategories: stage.selectedCategories };
+  return {
+    items,
+    params: stage.params,
+    seed: stage.seed,
+    selectedCategories: stage.selectedCategories,
+    suppletion: stage.suppletion,
+    derivationalAffixes: stage.derivationalAffixes,
+  };
 }
 
 /**
@@ -105,12 +122,14 @@ export const generateInitial = mutation({
     if (existing) throw new Error("Morphology already exists for this language — use reroll instead");
 
     const phonology = await getPhonologyData(ctx, languageId);
+    const lexiconItems = await getLexiconItems(ctx, languageId);
     const seed = { base: freshSeed(), variation: 0 };
     const { stage, items } = generateMorphology({
       seed,
       params: params ?? DEFAULT_MORPHOLOGY_PARAMS,
       phonology,
       previousItems: [],
+      lexiconItems,
       mode: "initial",
       now: Date.now(),
     });
@@ -145,6 +164,7 @@ export const reroll = mutation({
     if (stageRow.locked) throw new Error("Morphology stage is locked");
 
     const phonology = await getPhonologyData(ctx, languageId);
+    const lexiconItems = await getLexiconItems(ctx, languageId);
     const itemRows = await listItemRows(ctx, languageId);
     const previousItems = itemRows.map((r) => r.data as MorphologyAffixData);
     const previousStage = stageRow.data as MorphologyStageData;
@@ -155,6 +175,9 @@ export const reroll = mutation({
       params: params ?? previousStage.params,
       phonology,
       previousItems,
+      previousSuppletion: previousStage.suppletion,
+      previousDerivational: previousStage.derivationalAffixes,
+      lexiconItems,
       mode: "reroll",
       now: Date.now(),
     });
@@ -178,6 +201,7 @@ export const nudge = mutation({
     if (stageRow.locked) throw new Error("Morphology stage is locked");
 
     const phonology = await getPhonologyData(ctx, languageId);
+    const lexiconItems = await getLexiconItems(ctx, languageId);
     const itemRows = await listItemRows(ctx, languageId);
     const previousItems = itemRows.map((r) => r.data as MorphologyAffixData);
     const previousStage = stageRow.data as MorphologyStageData;
@@ -188,6 +212,9 @@ export const nudge = mutation({
       params: params ?? previousStage.params,
       phonology,
       previousItems,
+      previousSuppletion: previousStage.suppletion,
+      previousDerivational: previousStage.derivationalAffixes,
+      lexiconItems,
       mode: "nudge",
       now: Date.now(),
     });
@@ -352,6 +379,7 @@ export const revertToHistoryEntry = mutation({
 
     const reconstructed = await reconstructAt<MorphologySnapshot>(ctx, { languageId, stage: "morphology", historyEntryId });
     const itemRows = await listItemRows(ctx, languageId);
+    const phonology = await getPhonologyData(ctx, languageId);
 
     const nextStage: MorphologyStageData = {
       version: 1,
@@ -359,6 +387,12 @@ export const revertToHistoryEntry = mutation({
       params: reconstructed.params,
       selectedCategories: reconstructed.selectedCategories,
       affixCount: reconstructed.items.length,
+      // Recomputed rather than tracked in history — buildAllomorphy is a
+      // pure function of phonology, same rationale as diff.ts's
+      // MorphologySnapshot comment.
+      allomorphy: buildAllomorphy(phonology),
+      suppletion: reconstructed.suppletion,
+      derivationalAffixes: reconstructed.derivationalAffixes,
       generatedAt: Date.now(),
     };
 

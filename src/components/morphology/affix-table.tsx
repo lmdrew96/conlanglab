@@ -3,28 +3,55 @@
 import { useMemo, useState } from "react";
 import { useMutation } from "convex/react";
 import { api } from "../../../convex/_generated/api";
-import { formatAffixForm, formatCategoryList, formatDomain, formatHumanGloss } from "@/lib/morphology/format";
+import {
+  formatAffixForm,
+  formatCategoryList,
+  formatDerivationalAffixForm,
+  formatDomain,
+  formatHumanGloss,
+  formatStrategy,
+} from "@/lib/morphology/format";
 import { playAffix } from "@/lib/morphology/audio";
 import { SpeakerIcon } from "@/components/icons";
-import type { GrammaticalDomain, MorphologyAffixData } from "@/lib/morphology/engine";
+import type { AffixStrategy, DerivationalAffixData, GrammaticalDomain, MorphologyAffixData, SuppletionData } from "@/lib/morphology/engine";
+import { CATEGORY_MAP, DERIVATIONAL_RULE_CATALOG } from "@/lib/morphology/engine";
 import type { PhonologyData } from "@/lib/phonology/engine";
+import type { LexiconItemData } from "@/lib/lexicon/engine";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
 
 type ItemRow = Doc<"morphologyItems">;
+
+const STRATEGIES: AffixStrategy[] = [
+  "prefix",
+  "suffix",
+  "infix",
+  "circumfix",
+  "reduplicationFull",
+  "reduplicationPartial",
+  "ablaut",
+  "templatic",
+];
 
 export function AffixTable({
   languageId,
   items,
   stageLocked,
   phonology,
+  suppletion,
+  derivationalAffixes,
+  lexiconItems,
 }: {
   languageId: Id<"languages">;
   items: ItemRow[];
   stageLocked: boolean;
   phonology: PhonologyData;
+  suppletion: SuppletionData[];
+  derivationalAffixes: DerivationalAffixData[];
+  lexiconItems: Array<Doc<"lexiconItems">> | undefined;
 }) {
   const [search, setSearch] = useState("");
   const [domainFilter, setDomainFilter] = useState<GrammaticalDomain | "all">("all");
+  const [strategyFilter, setStrategyFilter] = useState<AffixStrategy | "all">("all");
   const [busyId, setBusyId] = useState<string | null>(null);
 
   const toggleLock = useMutation(api.morphology.mutations.toggleItemLock);
@@ -33,12 +60,22 @@ export function AffixTable({
 
   const staleCount = useMemo(() => items.filter((r) => r.staleSince != null).length, [items]);
 
+  const meaningByConceptId = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const row of lexiconItems ?? []) {
+      const data = row.data as LexiconItemData;
+      map.set(data.id, data.meaning);
+    }
+    return map;
+  }, [lexiconItems]);
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return items
       .filter((r) => {
         const data = r.data as MorphologyAffixData;
         if (domainFilter !== "all" && data.domain !== domainFilter) return false;
+        if (strategyFilter !== "all" && data.strategy !== strategyFilter) return false;
         const meaning = formatHumanGloss(data.values).toLowerCase();
         if (q && !meaning.includes(q) && !data.gloss.toLowerCase().includes(q) && !data.form.toLowerCase().includes(q)) {
           return false;
@@ -50,7 +87,7 @@ export function AffixTable({
           formatHumanGloss((b.data as MorphologyAffixData).values),
         ),
       );
-  }, [items, search, domainFilter]);
+  }, [items, search, domainFilter, strategyFilter]);
 
   async function handleRegenerate(affixId: string, mode: "nudge" | "reroll") {
     setBusyId(affixId);
@@ -94,6 +131,18 @@ export function AffixTable({
           <option value="nominal">Nominal</option>
           <option value="verbal">Verbal</option>
         </select>
+        <select
+          value={strategyFilter}
+          onChange={(e) => setStrategyFilter(e.target.value as AffixStrategy | "all")}
+          className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text"
+        >
+          <option value="all">All strategies</option>
+          {STRATEGIES.map((s) => (
+            <option key={s} value={s}>
+              {formatStrategy(s)}
+            </option>
+          ))}
+        </select>
       </div>
 
       <div className="max-h-[32rem] overflow-y-auto rounded-md border border-border">
@@ -104,6 +153,7 @@ export function AffixTable({
               <th className="px-2 py-1.5 font-medium">Meaning</th>
               <th className="px-2 py-1.5 font-medium">Category</th>
               <th className="px-2 py-1.5 font-medium">Domain</th>
+              <th className="px-2 py-1.5 font-medium">Strategy</th>
               <th className="px-2 py-1.5 text-right font-medium">Actions</th>
             </tr>
           </thead>
@@ -124,7 +174,7 @@ export function AffixTable({
                       >
                         <SpeakerIcon className="h-3 w-3" />
                       </button>
-                      {formatAffixForm(data)}
+                      {formatAffixForm(data, phonology)}
                     </span>
                     {row.staleSince != null && (
                       <span className="ml-1.5 rounded bg-amber-500/20 px-1 text-[10px] text-amber-600">stale</span>
@@ -136,6 +186,7 @@ export function AffixTable({
                   </td>
                   <td className="px-2 py-1.5 text-text-muted">{formatCategoryList(data.categories)}</td>
                   <td className="px-2 py-1.5 text-text-muted">{formatDomain(data.domain)}</td>
+                  <td className="px-2 py-1.5 text-text-muted">{formatStrategy(data.strategy)}</td>
                   <td className="px-2 py-1.5">
                     <div className="flex items-center justify-end gap-2 text-xs">
                       <button
@@ -171,6 +222,44 @@ export function AffixTable({
         </table>
         {filtered.length === 0 && <p className="p-3 text-xs text-text-muted">No affixes match this filter.</p>}
       </div>
+
+      {derivationalAffixes.length > 0 && (
+        <div className="flex flex-col gap-1.5 border-t border-border pt-3">
+          <h4 className="text-xs font-semibold text-text-muted">Derivational affixes</h4>
+          <ul className="flex flex-col gap-1 text-xs text-text-muted">
+            {derivationalAffixes.map((affix) => {
+              const rule = DERIVATIONAL_RULE_CATALOG.find((r) => r.id === affix.ruleId);
+              return (
+                <li key={affix.id}>
+                  <span className="font-mono text-text">{formatDerivationalAffixForm(affix)}</span>
+                  {rule && (
+                    <>
+                      {" "}
+                      — {rule.id} ({rule.sourcePos} → {rule.resultPos})
+                    </>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+
+      {suppletion.length > 0 && (
+        <div className="flex flex-col gap-1.5 border-t border-border pt-3">
+          <h4 className="text-xs font-semibold text-text-muted">Irregular forms</h4>
+          <ul className="flex flex-col gap-1 text-xs text-text-muted">
+            {suppletion.map((s) => (
+              <li key={s.id}>
+                <span className="text-text">&ldquo;{meaningByConceptId.get(s.rootConceptId) ?? s.rootConceptId}&rdquo;</span>{" "}
+                ({CATEGORY_MAP.get(s.category)?.label ?? s.category}:{" "}
+                {CATEGORY_MAP.get(s.category)?.values.find((v) => v.id === s.value)?.label ?? s.value}) →{" "}
+                <span className="font-mono text-text">{s.overrideForm}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }

@@ -30,7 +30,7 @@ export const FLEXIBLE_DOMAINS: FlexibleDomain[] = [
   "craft",
 ];
 
-export type ConceptKind = "core" | "flexible" | "compound";
+export type ConceptKind = "core" | "flexible" | "compound" | "derived";
 
 /**
  * Zipf's Law of Abbreviation tier (design doc: Frequency-weighted root
@@ -112,6 +112,17 @@ export interface LexiconItemData {
   stressedPhonemeIndex?: number;
   /** For compounds only: the two component concept ids whose roots were combined. */
   componentIds?: [string, string];
+  /**
+   * For derived items only (Section 5.5) — the source root + derivational
+   * rule this word family member came from. `sourceSeed`/`affixSeed` are
+   * the source root's and derivational affix's seeds AT THE TIME this item
+   * was built — a staleness check (see lexicon/staleness.ts) compares them
+   * against the source's current seed to detect "the root regenerated to a
+   * new form but this derived item didn't rebuild," the same
+   * seed-changed-means-content-changed idiom used everywhere else in this
+   * codebase, rather than a new dependency-tracking mechanism.
+   */
+  derivedFrom?: { conceptId: string; ruleId: string; sourceSeed: Seed; affixSeed: Seed };
   seed: Seed;
   locked: boolean;
 }

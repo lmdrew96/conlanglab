@@ -7,6 +7,9 @@
 
 import { Rng, deriveSeed } from "../lib/rng";
 import { buildSyllable } from "../phonology/generate";
+import { applyAffixesToRoot, resolvePhonemes } from "../morphology/generate";
+import { DERIVATIONAL_RULE_CATALOG } from "../morphology/content";
+import type { DerivationalRuleDef } from "../morphology/content";
 import { COMPOUND_LIST, CORE_LIST, FLEXIBLE_LIST } from "./content";
 import { ROOT_TARGET } from "./types";
 import type {
@@ -21,13 +24,18 @@ import type {
   Seed,
 } from "./types";
 import type { ConsonantPhoneme, PhonologyData, StressPattern, VowelPhoneme } from "../phonology/types";
+import type { AllomorphyData, DerivationalAffixData, MorphologyAffixData } from "../morphology/types";
 
 const DEFAULT_NUDGE_KEEP_PROBABILITY = 0.75;
 const MAX_UNIQUE_ATTEMPTS = 25;
+/** Section 5.5's derivation pass, budget-capped so word families stay a flavoring feature rather than doubling the lexicon — see selectDerivationPairs. */
+const DERIVATION_BUDGET = 30;
+const DERIVATION_PER_RULE_CAP = 6;
 
 const CORE_MAP = new Map(CORE_LIST.map((c) => [c.id, c]));
 const FLEXIBLE_MAP = new Map(FLEXIBLE_LIST.map((c) => [c.id, c]));
 const COMPOUND_MAP = new Map(COMPOUND_LIST.map((c) => [c.id, c]));
+const DERIVATIONAL_RULE_MAP = new Map(DERIVATIONAL_RULE_CATALOG.map((r) => [r.id, r]));
 
 interface ConceptMeta {
   pos: PartOfSpeech;
@@ -238,6 +246,90 @@ function buildCompoundItem(compound: CompoundConcept, a: LexiconItemData, b: Lex
   };
 }
 
+/**
+ * Section 5.5's derivational morphology — feeds a related word family back
+ * into Lexicon by applying one derivational affix (built in Morphology) to
+ * an existing root. Reuses Morphology's `applyAffixesToRoot` (a
+ * minimal MorphologyAffixData adapter around the linear-only derivational
+ * affix) rather than a parallel concatenation implementation — same
+ * boundary-repair pipeline inflectional affixation gets.
+ */
+function buildDerivedItem(
+  rule: DerivationalRuleDef,
+  sourceRoot: LexiconItemData,
+  affix: DerivationalAffixData,
+  phonology: PhonologyData,
+  allomorphy: AllomorphyData,
+  seed: Seed,
+): LexiconItemData {
+  const asAffixData: MorphologyAffixData = {
+    version: 1,
+    id: affix.id,
+    strategy: affix.slot,
+    domain: "nominal",
+    categories: [],
+    values: [],
+    gloss: "",
+    form: affix.form,
+    phonemeIds: affix.phonemeIds,
+    seed: affix.seed,
+    locked: false,
+  };
+  const assembled = applyAffixesToRoot(sourceRoot, [asAffixData], phonology, allomorphy);
+  const resolved = resolvePhonemes(assembled.phonemeIds, phonology);
+  const phonologicalForm = resolved
+    ? resolved.map((p, i) => (i === assembled.stressedPhonemeIndex ? `ˈ${p.ipa}` : p.ipa)).join("")
+    : assembled.form;
+
+  return {
+    version: 1,
+    id: `derived:${rule.id}:${sourceRoot.id}`,
+    kind: "derived",
+    domain: sourceRoot.domain,
+    partOfSpeech: rule.resultPos,
+    meaning: rule.glossTemplate(sourceRoot.meaning),
+    phonologicalForm,
+    phonemeIds: assembled.phonemeIds,
+    stressedPhonemeIndex: assembled.stressedPhonemeIndex,
+    derivedFrom: { conceptId: sourceRoot.id, ruleId: rule.id, sourceSeed: sourceRoot.seed, affixSeed: affix.seed },
+    seed,
+    locked: false,
+  };
+}
+
+/**
+ * Which (rule, root, affix) triples get derived this generation pass —
+ * budget-capped so word families stay a flavoring feature rather than
+ * doubling the lexicon. Roots are preferred by frequency tier (higher tier
+ * = more likely to plausibly have a derived family member — a "runner" is
+ * more expected than a derived form of a rare domain word), shuffled within
+ * tier for variety rather than always picking the same alphabetically-first
+ * roots.
+ */
+function selectDerivationPairs(
+  rng: Rng,
+  rootsByConceptId: Map<string, LexiconItemData>,
+  derivationalAffixes: DerivationalAffixData[],
+): Array<{ rule: DerivationalRuleDef; root: LexiconItemData; affix: DerivationalAffixData }> {
+  const tierRank = (root: LexiconItemData): number => {
+    const tier = CORE_MAP.get(root.id)?.frequencyTier;
+    return tier === "A" ? 0 : tier === "B" ? 1 : tier === "C" ? 2 : 3;
+  };
+
+  const pairs: Array<{ rule: DerivationalRuleDef; root: LexiconItemData; affix: DerivationalAffixData }> = [];
+  for (const affix of derivationalAffixes) {
+    const rule = DERIVATIONAL_RULE_MAP.get(affix.ruleId);
+    if (!rule) continue;
+    const eligible = Array.from(rootsByConceptId.values()).filter(
+      (r) => r.partOfSpeech === rule.sourcePos && r.kind === "core",
+    );
+    const ranked = rng.shuffle(eligible).sort((a, b) => tierRank(a) - tierRank(b));
+    for (const root of ranked.slice(0, DERIVATION_PER_RULE_CAP)) pairs.push({ rule, root, affix });
+    if (pairs.length >= DERIVATION_BUDGET) break;
+  }
+  return pairs.slice(0, DERIVATION_BUDGET);
+}
+
 /** Weighted sample without replacement — used to spend the ~50 non-core slots across flexible domains by their weight (Section 6.2). */
 function weightedSampleWithoutReplacement<T extends { domain: FlexibleDomain }>(
   rng: Rng,
@@ -268,6 +360,9 @@ export interface GenerateLexiconArgs {
   phonology: PhonologyData;
   /** Full current collection — empty on initial generation. */
   previousItems: LexiconItemData[];
+  /** Morphology's derivational affixes (Section 5.5) — omitted/empty if Morphology hasn't generated yet (nothing enforces Lexicon-then-Morphology ordering at the UI level, unlike the roadmap's build order), which just skips the derivation pass for this run. */
+  derivationalAffixes?: DerivationalAffixData[];
+  allomorphy?: AllomorphyData;
   mode: "initial" | "reroll" | "nudge";
   now: number;
   nudgeKeepProbability?: number;
@@ -334,6 +429,20 @@ export function generateLexicon(args: GenerateLexiconArgs): GenerateLexiconResul
     if (!a || !b) continue;
     const itemSeed = resolveItemSeed(seed, compound.id, previous, mode);
     items.push(buildCompoundItem(compound, a, b, itemSeed));
+  }
+
+  if (args.derivationalAffixes && args.derivationalAffixes.length > 0 && args.allomorphy) {
+    const pairs = selectDerivationPairs(rng, rootsByConceptId, args.derivationalAffixes);
+    for (const { rule, root, affix } of pairs) {
+      const derivedId = `derived:${rule.id}:${root.id}`;
+      const previous = previousById.get(derivedId);
+      if (previous?.locked) {
+        items.push(previous);
+        continue;
+      }
+      const itemSeed = resolveItemSeed(seed, derivedId, previous, mode);
+      items.push(buildDerivedItem(rule, root, affix, phonology, args.allomorphy, itemSeed));
+    }
   }
 
   const stage: LexiconStageData = { version: 1, seed, params, itemCount: items.length, generatedAt: now };

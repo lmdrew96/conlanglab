@@ -16,6 +16,7 @@ const KIND_LABELS: Record<LexiconItemData["kind"], string> = {
   core: "Core",
   flexible: "Flavor",
   compound: "Compound",
+  derived: "Derived",
 };
 
 export function RootsTable({
@@ -41,6 +42,15 @@ export function RootsTable({
   const domains = useMemo(() => {
     const set = new Set(items.map((r) => (r.data as LexiconItemData).domain));
     return Array.from(set).sort();
+  }, [items]);
+
+  const meaningByConceptId = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const row of items) {
+      const data = row.data as LexiconItemData;
+      map.set(data.id, data.meaning);
+    }
+    return map;
   }, [items]);
 
   const staleCount = useMemo(() => items.filter((r) => r.staleSince != null).length, [items]);
@@ -152,28 +162,43 @@ export function RootsTable({
                       <span className="ml-1.5 rounded bg-amber-500/20 px-1 text-[10px] text-amber-600">stale</span>
                     )}
                   </td>
-                  <td className="px-2 py-1.5 text-text">{data.meaning}</td>
+                  <td className="px-2 py-1.5 text-text">
+                    {data.meaning}
+                    {data.derivedFrom && (
+                      <span className="ml-1.5 text-[10px] text-text-muted">
+                        (derived from &ldquo;{meaningByConceptId.get(data.derivedFrom.conceptId) ?? data.derivedFrom.conceptId}&rdquo;)
+                      </span>
+                    )}
+                  </td>
                   <td className="px-2 py-1.5 text-text-muted">{formatPartOfSpeech(data.partOfSpeech)}</td>
                   <td className="px-2 py-1.5 text-text-muted">{KIND_LABELS[data.kind]}</td>
                   <td className="px-2 py-1.5 text-text-muted">{data.domain}</td>
                   <td className="px-2 py-1.5">
                     <div className="flex items-center justify-end gap-2 text-xs">
-                      <button
-                        type="button"
-                        disabled={stageLocked || row.locked || isBusy}
-                        onClick={() => handleRegenerate(data.id, "nudge")}
-                        className="text-text-muted hover:text-text disabled:opacity-40"
-                      >
-                        Nudge
-                      </button>
-                      <button
-                        type="button"
-                        disabled={stageLocked || row.locked || isBusy}
-                        onClick={() => handleRegenerate(data.id, "reroll")}
-                        className="text-text-muted hover:text-text disabled:opacity-40"
-                      >
-                        Reroll
-                      </button>
+                      {data.kind === "derived" ? (
+                        <span className="text-text-muted" title="Derived items regenerate with the whole Lexicon stage, not individually">
+                          Word family
+                        </span>
+                      ) : (
+                        <>
+                          <button
+                            type="button"
+                            disabled={stageLocked || row.locked || isBusy}
+                            onClick={() => handleRegenerate(data.id, "nudge")}
+                            className="text-text-muted hover:text-text disabled:opacity-40"
+                          >
+                            Nudge
+                          </button>
+                          <button
+                            type="button"
+                            disabled={stageLocked || row.locked || isBusy}
+                            onClick={() => handleRegenerate(data.id, "reroll")}
+                            className="text-text-muted hover:text-text disabled:opacity-40"
+                          >
+                            Reroll
+                          </button>
+                        </>
+                      )}
                       <button
                         type="button"
                         disabled={stageLocked}

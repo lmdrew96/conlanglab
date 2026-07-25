@@ -12,7 +12,7 @@ import { AffixTable } from "@/components/morphology/affix-table";
 import { ExampleWordsPanel } from "@/components/morphology/example-words-panel";
 import { HistorySidebar } from "@/components/morphology/history-sidebar";
 import { useMorphologyDraft } from "@/lib/morphology/use-morphology-draft";
-import { suggestTypology } from "@/lib/morphology/engine";
+import { buildAllomorphy, suggestTypology } from "@/lib/morphology/engine";
 import type { MorphologyStageData } from "@/lib/morphology/engine";
 import type { PhonologyData } from "@/lib/phonology/engine";
 
@@ -199,13 +199,26 @@ export function MorphologyPage({ languageId }: { languageId: Id<"languages"> }) 
               )}
 
               {items && items.length > 0 && (
-                <ExampleWordsPanel lexiconItems={lexiconItems} morphologyItems={items} phonology={phonologyData} />
+                <ExampleWordsPanel
+                  lexiconItems={lexiconItems}
+                  morphologyItems={items}
+                  phonology={phonologyData}
+                  allomorphy={committed.allomorphy ?? buildAllomorphy(phonologyData)}
+                />
               )}
 
               {items === undefined ? (
                 <p className="text-sm text-text-muted">Loading affixes...</p>
               ) : (
-                <AffixTable languageId={languageId} items={items} stageLocked={stageLocked} phonology={phonologyData} />
+                <AffixTable
+                  languageId={languageId}
+                  items={items}
+                  stageLocked={stageLocked}
+                  phonology={phonologyData}
+                  suppletion={committed?.suppletion ?? []}
+                  derivationalAffixes={committed?.derivationalAffixes ?? []}
+                  lexiconItems={lexiconItems}
+                />
               )}
             </div>
 

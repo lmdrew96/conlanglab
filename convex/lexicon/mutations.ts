@@ -5,10 +5,12 @@ import { appendHistory, reconstructAt } from "../lib/history";
 import { freshSeed } from "../lib/rng";
 import { diffLexicon } from "./diff";
 import { generateLexicon, regenerateSingleItem } from "./generate";
+import { flagStaleDerivedItems } from "./staleness";
 import { DEFAULT_LEXICON_PARAMS } from "./types";
 import type { LexiconSnapshot } from "./diff";
 import type { LexiconItemData, LexiconStageData } from "./types";
 import type { PhonologyData } from "../phonology/types";
+import type { AllomorphyData, DerivationalAffixData, MorphologyStageData } from "../morphology/types";
 import type { MutationCtx } from "../_generated/server";
 import type { Doc, Id } from "../_generated/dataModel";
 
@@ -46,6 +48,20 @@ async function listItemRows(ctx: MutationCtx, languageId: Id<"languages">) {
     .query("lexiconItems")
     .withIndex("by_language", (q) => q.eq("languageId", languageId))
     .collect();
+}
+
+/** Read-only lookup — Morphology may not have generated yet (nothing enforces Lexicon-then-Morphology ordering at the UI level), in which case derivation just stays empty for this run. */
+async function getMorphologyDerivationInputs(
+  ctx: MutationCtx,
+  languageId: Id<"languages">,
+): Promise<{ derivationalAffixes?: DerivationalAffixData[]; allomorphy?: AllomorphyData }> {
+  const row = await ctx.db
+    .query("morphology")
+    .withIndex("by_language", (q) => q.eq("languageId", languageId))
+    .unique();
+  const data = row?.data as MorphologyStageData | undefined;
+  if (!data) return {};
+  return { derivationalAffixes: data.derivationalAffixes, allomorphy: data.allomorphy };
 }
 
 function snapshotOf(items: LexiconItemData[], stage: LexiconStageData): LexiconSnapshot {
@@ -109,12 +125,15 @@ export const generateInitial = mutation({
     if (existing) throw new Error("Lexicon already exists for this language — use reroll instead");
 
     const phonology = await getPhonologyData(ctx, languageId);
+    const { derivationalAffixes, allomorphy } = await getMorphologyDerivationInputs(ctx, languageId);
     const seed = { base: freshSeed(), variation: 0 };
     const { stage, items } = generateLexicon({
       seed,
       params: params ?? DEFAULT_LEXICON_PARAMS,
       phonology,
       previousItems: [],
+      derivationalAffixes,
+      allomorphy,
       mode: "initial",
       now: Date.now(),
     });
@@ -149,6 +168,7 @@ export const reroll = mutation({
     if (stageRow.locked) throw new Error("Lexicon stage is locked");
 
     const phonology = await getPhonologyData(ctx, languageId);
+    const { derivationalAffixes, allomorphy } = await getMorphologyDerivationInputs(ctx, languageId);
     const itemRows = await listItemRows(ctx, languageId);
     const previousItems = itemRows.map((r) => r.data as LexiconItemData);
     const previousStage = stageRow.data as LexiconStageData;
@@ -159,6 +179,8 @@ export const reroll = mutation({
       params: params ?? previousStage.params,
       phonology,
       previousItems,
+      derivationalAffixes,
+      allomorphy,
       mode: "reroll",
       now: Date.now(),
     });
@@ -182,6 +204,7 @@ export const nudge = mutation({
     if (stageRow.locked) throw new Error("Lexicon stage is locked");
 
     const phonology = await getPhonologyData(ctx, languageId);
+    const { derivationalAffixes, allomorphy } = await getMorphologyDerivationInputs(ctx, languageId);
     const itemRows = await listItemRows(ctx, languageId);
     const previousItems = itemRows.map((r) => r.data as LexiconItemData);
     const previousStage = stageRow.data as LexiconStageData;
@@ -192,6 +215,8 @@ export const nudge = mutation({
       params: params ?? previousStage.params,
       phonology,
       previousItems,
+      derivationalAffixes,
+      allomorphy,
       mode: "nudge",
       now: Date.now(),
     });
@@ -241,6 +266,7 @@ export const regenerateItem = mutation({
       const row = rowByConcept.get(item.id);
       if (row) await ctx.db.patch(row._id, { data: item, staleSince: null });
     }
+    await flagStaleDerivedItems(ctx, languageId);
 
     const nextItems = allItems.map((i) => updated.find((u) => u.id === i.id) ?? i);
     await appendHistory(ctx, {
@@ -284,6 +310,7 @@ export const regenerateStale = mutation({
         if (r) await ctx.db.patch(r._id, { data: item, staleSince: null });
       }
     }
+    await flagStaleDerivedItems(ctx, languageId);
 
     await appendHistory(ctx, {
       languageId,

@@ -1,5 +1,13 @@
 import { CATEGORY_MAP } from "./engine";
-import type { AffixValueRef, CategoryId, GrammaticalDomain, MorphologicalType, MorphologyAffixData } from "./engine";
+import type {
+  AffixStrategy,
+  AffixValueRef,
+  CategoryId,
+  DerivationalAffixData,
+  GrammaticalDomain,
+  MorphologicalType,
+  MorphologyAffixData,
+} from "./engine";
 
 const TYPOLOGY_LABELS: Record<MorphologicalType, string> = {
   isolating: "Isolating",
@@ -36,8 +44,66 @@ export function formatCategoryLabel(categoryId: CategoryId): string {
   return CATEGORY_MAP.get(categoryId)?.label ?? categoryId;
 }
 
-/** Renders an affix's raw IPA form with a hyphen on the attaching side, e.g. "-ta" for a suffix, "ta-" for a prefix. */
-export function formatAffixForm(item: MorphologyAffixData): string {
+const STRATEGY_LABELS: Record<AffixStrategy, string> = {
+  prefix: "Prefix",
+  suffix: "Suffix",
+  infix: "Infix",
+  circumfix: "Circumfix",
+  reduplicationFull: "Full reduplication",
+  reduplicationPartial: "Partial reduplication",
+  ablaut: "Ablaut",
+  templatic: "Templatic",
+};
+
+export function formatStrategy(strategy: AffixStrategy): string {
+  return STRATEGY_LABELS[strategy] ?? strategy;
+}
+
+/** Resolves a phoneme id to its IPA symbol for display — used by ablaut/templatic, which store phoneme ids rather than a precomputed form string (their surface form depends on whichever root they attach to). Falls back to "?" if the language's inventory has since changed (Section 10.2a staleness — same "regenerate to fix" contract as playback). */
+function resolveIpa(phonemeId: string, phonology: { consonants: Array<{ id: string; ipa: string }>; vowels: Array<{ id: string; ipa: string }> }): string {
+  return phonology.consonants.find((p) => p.id === phonemeId)?.ipa ?? phonology.vowels.find((p) => p.id === phonemeId)?.ipa ?? "?";
+}
+
+/**
+ * Renders an affix's form using the notational convention for its strategy
+ * — a hyphen on the attaching side for prefix/suffix (e.g. "-ta"/"ta-"),
+ * angle brackets for an infix, both pieces for a circumfix, a RED- tag for
+ * reduplication (its actual copied material is root-dependent, computed at
+ * apply-time — see convex/morphology/generate.ts's applyAffixesToRoot), and
+ * an arrow notation for ablaut/templatic's vowel change.
+ */
+export function formatAffixForm(
+  item: MorphologyAffixData,
+  phonology: { consonants: Array<{ id: string; ipa: string }>; vowels: Array<{ id: string; ipa: string }> },
+): string {
+  switch (item.strategy) {
+    case "prefix":
+      return `${item.form}-`;
+    case "suffix":
+      return `-${item.form}`;
+    case "infix":
+      return `-⟨${item.form}⟩-`;
+    case "circumfix":
+      return `${item.form}- -${item.circumfixClosing ?? ""}`;
+    case "reduplicationFull":
+      return item.reduplicationPlacement === "after" ? "-RED" : "RED-";
+    case "reduplicationPartial": {
+      const shape = (item.reduplicationShape ?? ["C", "V"]).join("");
+      return item.reduplicationPlacement === "after" ? `-${shape}~` : `~${shape}-`;
+    }
+    case "ablaut":
+      return item.ablautFrom && item.ablautTo
+        ? `${resolveIpa(item.ablautFrom, phonology)}→${resolveIpa(item.ablautTo, phonology)}`
+        : "ablaut";
+    case "templatic":
+      return item.templaticMelody && item.templaticMelody.length > 0
+        ? `C_${item.templaticMelody.map((id) => resolveIpa(id, phonology)).join("_")}`
+        : "templatic";
+  }
+}
+
+/** Same hyphen convention as formatAffixForm's prefix/suffix cases — derivational affixes are linear-only (Section 5.5's v1 scope, see DerivationalAffixData). */
+export function formatDerivationalAffixForm(item: DerivationalAffixData): string {
   return item.slot === "prefix" ? `${item.form}-` : `-${item.form}`;
 }
 

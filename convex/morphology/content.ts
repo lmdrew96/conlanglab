@@ -1,6 +1,8 @@
 // Zero Convex imports — same rule as types.ts.
 
-import type { CategoryDef, CategoryId, MorphologicalType } from "./types";
+import type { AffixStrategy, CategoryDef, CategoryId, DerivationalRuleId, MorphologicalType } from "./types";
+import type { ConsonantPlace } from "../phonology/types";
+import type { PartOfSpeech } from "../lexicon/types";
 
 export const CATEGORY_CATALOG: CategoryDef[] = [
   // --- Nominal (Section 5.3) ---
@@ -205,3 +207,110 @@ export const AFFIX_SHAPE_WEIGHTS: Array<{ shape: ("C" | "V")[]; weight: number }
  * case/number fusion).
  */
 export const FUSION_BUNDLE_CAP = 3;
+
+/**
+ * Section 5.2's non-linear strategy mix, per typology. `nonLinearRate` is
+ * the chance a given affix cell uses a non-linear strategy at all (drawn
+ * from `weights` when it does) instead of the prefix/suffix baseline —
+ * prefix/suffix stays the cross-linguistic default for every typology,
+ * non-linear strategies are the deliberate minority per Section 5.3's
+ * "plausible subset, not maximal marking" framing. Isolating gets 0: its
+ * existing [0,2] category cap (TYPOLOGY_CATEGORY_COUNT) already does the
+ * "near-bare" work; layering non-linear strategies on top would fight that.
+ * Each typology's `weights` sum to 1 for legibility.
+ */
+export const STRATEGY_MIX: Record<
+  MorphologicalType,
+  { nonLinearRate: number; weights: Partial<Record<AffixStrategy, number>> }
+> = {
+  isolating: { nonLinearRate: 0, weights: {} },
+  agglutinative: {
+    nonLinearRate: 0.12,
+    weights: { reduplicationFull: 0.45, reduplicationPartial: 0.35, infix: 0.2 },
+  },
+  fusional: {
+    nonLinearRate: 0.2,
+    weights: { ablaut: 0.4, circumfix: 0.3, reduplicationFull: 0.2, templatic: 0.1 },
+  },
+  polysynthetic: {
+    nonLinearRate: 0.3,
+    weights: {
+      circumfix: 0.25,
+      infix: 0.2,
+      reduplicationFull: 0.2,
+      reduplicationPartial: 0.15,
+      ablaut: 0.15,
+      templatic: 0.05,
+    },
+  },
+};
+
+/**
+ * Weighted shapes for partial reduplication's copied piece (Section 5.2) —
+ * CV (copy the root's first onset+nucleus) is the cross-linguistic default
+ * partial-reduplication template; bare-C and bare-V copies are rarer but
+ * attested.
+ */
+export const REDUPLICATION_SHAPE_WEIGHTS: Array<{ shape: ("C" | "V")[]; weight: number }> = [
+  { shape: ["C", "V"], weight: 0.6 },
+  { shape: ["V"], weight: 0.15 },
+  { shape: ["C"], weight: 0.15 },
+  { shape: ["C", "V", "C"], weight: 0.1 },
+];
+
+/** Reduplication attaches before the root (prefixing) far more often cross-linguistically (WALS) than after — this is the lean, not an absolute. */
+export const REDUPLICATION_BEFORE_LEAN = 0.8;
+
+/**
+ * Section 5.4's consonant assimilation, v1 scope: nasal place assimilation
+ * only — the single most cross-linguistically common and legible
+ * assimilation pattern (e.g. English im-possible vs in-tolerant). Keyed by
+ * the following consonant's place; value is the place a nasal assimilates
+ * to when adjacent to it. Deliberately partial — not every place has a
+ * common assimilation target, and a language may not have a nasal at that
+ * place anyway (checked at apply-time against the language's own
+ * inventory, not assumed here).
+ */
+export const NASAL_ASSIMILATION_TARGET: Partial<Record<ConsonantPlace, ConsonantPlace>> = {
+  bilabial: "bilabial",
+  labiodental: "labiodental",
+  velar: "velar",
+  uvular: "uvular",
+};
+
+export interface DerivationalRuleDef {
+  id: DerivationalRuleId;
+  sourcePos: PartOfSpeech;
+  resultPos: PartOfSpeech;
+  /** Probability the generated affix is a suffix rather than a prefix — same convention as SUFFIX_LEAN. */
+  suffixLean: number;
+  /** Builds the derived word's gloss from its source root's gloss, e.g. "run" -> "one who runs". */
+  glossTemplate: (sourceGloss: string) => string;
+}
+
+/**
+ * Section 5.5's derivational rule set — a small, curated set of common
+ * cross-linguistic word-formation patterns, applied productively (any
+ * eligible root can undergo one) rather than hand-paired per word-family
+ * the way Lexicon's idiomatic COMPOUND_LIST is. See lexicon/generate.ts's
+ * derivation pass for eligibility + budget rules.
+ */
+export const DERIVATIONAL_RULE_CATALOG: DerivationalRuleDef[] = [
+  { id: "agentive", sourcePos: "verb", resultPos: "noun", suffixLean: 0.8, glossTemplate: (g) => `one who ${g}s` },
+  {
+    id: "abstractQuality",
+    sourcePos: "adjective",
+    resultPos: "noun",
+    suffixLean: 0.75,
+    glossTemplate: (g) => `the quality of being ${g}`,
+  },
+  { id: "diminutive", sourcePos: "noun", resultPos: "noun", suffixLean: 0.7, glossTemplate: (g) => `little ${g}` },
+  { id: "adjectival", sourcePos: "noun", resultPos: "adjective", suffixLean: 0.65, glossTemplate: (g) => `${g}-like` },
+  {
+    id: "resultative",
+    sourcePos: "verb",
+    resultPos: "noun",
+    suffixLean: 0.8,
+    glossTemplate: (g) => `the result of ${g}ing`,
+  },
+];
