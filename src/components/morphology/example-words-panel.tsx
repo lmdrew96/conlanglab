@@ -2,9 +2,12 @@
 
 import { useMemo } from "react";
 import { formatAffixForm, formatHumanGloss } from "@/lib/morphology/format";
+import { playRoot } from "@/lib/lexicon/audio";
 import type { MorphologyAffixData } from "@/lib/morphology/engine";
 import type { LexiconItemData } from "@/lib/lexicon/engine";
+import type { PhonologyData } from "@/lib/phonology/engine";
 import type { Doc } from "../../../convex/_generated/dataModel";
+import { SpeakerIcon } from "@/components/icons";
 
 /** Strips the stress mark/syllable-dot notation lexicon roots carry, matching the convention lexicon's buildCompoundItem already uses when concatenating forms. */
 function bareForm(phonologicalForm: string): string {
@@ -17,6 +20,21 @@ function attach(rootForm: string, affixes: MorphologyAffixData[]): string {
   return [...prefixes.map((a) => a.form), rootForm, ...suffixes.map((a) => a.form)].join("");
 }
 
+/** Same prefix/root/suffix ordering as `attach`, but over phoneme-id sequences so the assembled word can be played — see src/lib/lexicon/audio.ts's resolveRootPhonemes. Shifts the root's stressedPhonemeIndex by however many prefix phonemes now sit ahead of it. */
+function attachPhonemeIds(
+  root: LexiconItemData,
+  affixes: MorphologyAffixData[],
+): { phonemeIds: string[]; stressedPhonemeIndex: number | undefined } {
+  const prefixes = affixes.filter((a) => a.slot === "prefix");
+  const suffixes = affixes.filter((a) => a.slot === "suffix");
+  const prefixPhonemeIds = prefixes.flatMap((a) => a.phonemeIds);
+  return {
+    phonemeIds: [...prefixPhonemeIds, ...root.phonemeIds, ...suffixes.flatMap((a) => a.phonemeIds)],
+    stressedPhonemeIndex:
+      root.stressedPhonemeIndex !== undefined ? prefixPhonemeIds.length + root.stressedPhonemeIndex : undefined,
+  };
+}
+
 /**
  * Read-only demo, nothing persisted: samples one real noun and one real
  * verb from the M2 lexicon and shows them inflected with a couple of this
@@ -27,9 +45,11 @@ function attach(rootForm: string, affixes: MorphologyAffixData[]): string {
 export function ExampleWordsPanel({
   lexiconItems,
   morphologyItems,
+  phonology,
 }: {
   lexiconItems: Array<Doc<"lexiconItems">> | undefined;
   morphologyItems: Array<Doc<"morphologyItems">>;
+  phonology: PhonologyData;
 }) {
   const example = useMemo(() => {
     if (!lexiconItems || lexiconItems.length === 0) return null;
@@ -45,8 +65,20 @@ export function ExampleWordsPanel({
     const verbalAffixes = affixes.filter((a) => a.domain === "verbal").slice(0, 2);
 
     return {
-      noun: noun ? { meaning: noun.meaning, word: attach(bareForm(noun.phonologicalForm), nominalAffixes) } : null,
-      verb: verb ? { meaning: verb.meaning, word: attach(bareForm(verb.phonologicalForm), verbalAffixes) } : null,
+      noun: noun
+        ? {
+            meaning: noun.meaning,
+            word: attach(bareForm(noun.phonologicalForm), nominalAffixes),
+            ...attachPhonemeIds(noun, nominalAffixes),
+          }
+        : null,
+      verb: verb
+        ? {
+            meaning: verb.meaning,
+            word: attach(bareForm(verb.phonologicalForm), verbalAffixes),
+            ...attachPhonemeIds(verb, verbalAffixes),
+          }
+        : null,
       nominalAffixes,
       verbalAffixes,
     };
@@ -60,7 +92,17 @@ export function ExampleWordsPanel({
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         {example.noun && (
           <div>
-            <div className="font-mono text-base text-text">{example.noun.word}</div>
+            <span className="inline-flex items-center gap-1 font-mono text-base text-text">
+              <button
+                type="button"
+                onClick={() => playRoot(example.noun!.phonemeIds, phonology, example.noun!.stressedPhonemeIndex)}
+                title={`Play /${example.noun.word}/`}
+                className="hover:text-accent"
+              >
+                <SpeakerIcon className="h-3.5 w-3.5" />
+              </button>
+              {example.noun.word}
+            </span>
             <div className="text-xs text-text-muted">
               &ldquo;{example.noun.meaning}&rdquo;
               {example.nominalAffixes.length > 0 && (
@@ -74,7 +116,17 @@ export function ExampleWordsPanel({
         )}
         {example.verb && (
           <div>
-            <div className="font-mono text-base text-text">{example.verb.word}</div>
+            <span className="inline-flex items-center gap-1 font-mono text-base text-text">
+              <button
+                type="button"
+                onClick={() => playRoot(example.verb!.phonemeIds, phonology, example.verb!.stressedPhonemeIndex)}
+                title={`Play /${example.verb.word}/`}
+                className="hover:text-accent"
+              >
+                <SpeakerIcon className="h-3.5 w-3.5" />
+              </button>
+              {example.verb.word}
+            </span>
             <div className="text-xs text-text-muted">
               &ldquo;{example.verb.meaning}&rdquo;
               {example.verbalAffixes.length > 0 && (

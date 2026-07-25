@@ -199,7 +199,7 @@ export function MorphologyPage({ languageId }: { languageId: Id<"languages"> }) 
               )}
 
               {items && items.length > 0 && (
-                <ExampleWordsPanel lexiconItems={lexiconItems} morphologyItems={items} />
+                <ExampleWordsPanel lexiconItems={lexiconItems} morphologyItems={items} phonology={phonologyData} />
               )}
 
               {items === undefined ? (
