@@ -1,12 +1,15 @@
 import Link from "next/link";
 import { Show, SignInButton, UserButton } from "@clerk/nextjs";
 import { ThemeSwitcher } from "@/components/theme-switcher";
+import { RotaryTitle } from "@/components/rotary-title";
 
 export function Header() {
   return (
     <header className="flex items-center justify-between border-b border-border px-6 py-4">
       <Link href="/" className="text-lg font-semibold text-text">
-        CLL <span className="text-text-muted">— ConLangLab</span>
+        <RotaryTitle>
+          CLL <span className="text-text-muted">— ConLangLab</span>
+        </RotaryTitle>
       </Link>
       <div className="flex items-center gap-3">
         <ThemeSwitcher />

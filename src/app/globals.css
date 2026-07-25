@@ -134,3 +134,23 @@ h2,
 h3 {
   font-family: var(--font-heading), var(--font-sans), Arial, Helvetica, sans-serif;
 }
+
+@keyframes rotary-flip {
+  0% {
+    transform: rotateX(-90deg);
+    opacity: 0;
+  }
+  60% {
+    transform: rotateX(12deg);
+    opacity: 1;
+  }
+  100% {
+    transform: rotateX(0deg);
+    opacity: 1;
+  }
+}
+
+.rotary-flip {
+  transform-origin: 50% 100%;
+  animation: rotary-flip 0.5s ease-out;
+}
