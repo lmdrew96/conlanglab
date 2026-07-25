@@ -20,6 +20,17 @@ export interface PinkTromboneModule {
     started: boolean;
     scriptProcessor: ScriptProcessorNode;
     startSound: () => void;
+    /**
+     * Inserted by loadEngine() between scriptProcessor and destination.
+     * Glottis.intensity/UITenseness/UIFrequency are plain numbers read live
+     * per-sample, not real AudioParams — there's nothing to
+     * linearRampToValueAtTime on the engine itself. This gain node is the
+     * one place we DO have a real AudioParam, so consonant scheduling
+     * (articulation.ts) fades through it to mask the hard Glottis.intensity
+     * writes voiceless closures still need for correctness (see that file's
+     * fadeGlottisOut/In usage).
+     */
+    masterGain: GainNode;
   };
   Glottis: {
     isTouched: boolean;
@@ -54,11 +65,47 @@ function loadEngine(): Promise<PinkTromboneModule> {
       // add an extra layer of indirection for no benefit.
       engine.AudioSystem.started = true;
       engine.AudioSystem.startSound();
+      // The vendor engine wires scriptProcessor straight to destination —
+      // splice a gain node in between so we have one real AudioParam to
+      // automate (see the masterGain field comment above).
+      const masterGain = engine.AudioSystem.audioContext.createGain();
+      engine.AudioSystem.scriptProcessor.disconnect();
+      engine.AudioSystem.scriptProcessor.connect(masterGain);
+      masterGain.connect(engine.AudioSystem.audioContext.destination);
+      engine.AudioSystem.masterGain = masterGain;
       return engine;
     });
   }
   return modulePromise;
 }
+
+// ~8ms is long enough for a linear ramp to mask the sample-level jump a
+// direct Glottis.intensity=0 write would otherwise cause (intensity has no
+// crossfade of its own — it's multiplied straight into the output every
+// sample), short enough to disappear inside any real consonant's duration.
+const DECLICK_SECONDS = 0.008;
+
+function rampMasterGain(engine: PinkTromboneModule, target: number, seconds: number): void {
+  const ctx = engine.AudioSystem.audioContext;
+  const gainParam = engine.AudioSystem.masterGain.gain;
+  const now = ctx.currentTime;
+  gainParam.cancelScheduledValues(now);
+  gainParam.setValueAtTime(gainParam.value, now);
+  gainParam.linearRampToValueAtTime(target, now + seconds);
+}
+
+/** Ramp the tract's output toward silence — call this BEFORE hard-zeroing Glottis.intensity so that zeroing happens while output is already inaudible instead of mid-waveform. */
+export function fadeGlottisOut(engine: PinkTromboneModule): void {
+  rampMasterGain(engine, 0, DECLICK_SECONDS);
+}
+
+/** Ramp the tract's output back up — call this at every point voicing resumes, even when the immediately preceding unit didn't mute (cheap no-op if gain is already 1), since scheduling can't know in general what came before. */
+export function fadeGlottisIn(engine: PinkTromboneModule): void {
+  rampMasterGain(engine, 1, DECLICK_SECONDS);
+}
+
+/** Seconds to delay a hard Glottis.intensity=0 write after calling fadeGlottisOut, so the zero lands after the fade completes. */
+export const GLOTTIS_MUTE_DELAY = DECLICK_SECONDS;
 
 export interface GestureStep {
   /** Seconds from the start of this gesture sequence. */
@@ -103,6 +150,12 @@ export async function runGestures(steps: GestureStep[]): Promise<PinkTromboneMod
   // target — means there's no leftover interpolation to catch either.
   engine.Tract.diameter.set(REST_SHAPE);
   engine.Tract.targetDiameter.set(REST_SHAPE);
+  // A prior sequence interrupted mid-voiceless-consonant could leave gain
+  // faded down (see fadeGlottisOut) — snap it back immediately, same as the
+  // diameter reset above, so a new utterance always starts from a clean
+  // deterministic state rather than wherever the last one left off.
+  engine.AudioSystem.masterGain.gain.cancelScheduledValues(engine.AudioSystem.audioContext.currentTime);
+  engine.AudioSystem.masterGain.gain.value = 1;
   for (const step of steps) {
     const id = setTimeout(() => step.apply(engine), Math.max(0, step.at * 1000));
     pendingTimeouts.push(id);

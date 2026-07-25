@@ -20,6 +20,7 @@
 // for the previous engine, mixed alongside the tract's own resonance.
 
 import type { ConsonantManner, ConsonantPhoneme, ConsonantPlace, VowelPhoneme } from "../../../convex/phonology/types";
+import { fadeGlottisIn, fadeGlottisOut, GLOTTIS_MUTE_DELAY } from "./pink-trombone-engine";
 import type { GestureStep, PinkTromboneModule } from "./pink-trombone-engine";
 
 function isVowelUnit(unit: ConsonantPhoneme | VowelPhoneme): unit is VowelPhoneme {
@@ -357,6 +358,18 @@ function setShape(engine: PinkTromboneModule, shape: number[]): void {
 }
 
 /**
+ * Hard-zeroing Glottis.intensity mid-waveform is a genuine sample-level
+ * discontinuity (a click) — fadeGlottisOut masks it, but the zero itself
+ * still has to happen (intensity's own natural decay is ~230ms, far slower
+ * than most consonants, so without this a voiceless closure would still
+ * sound voiced for its whole duration). Schedule the zero to land just after
+ * the fade completes instead of in the same instant.
+ */
+function scheduleMuteZero(cursor: Cursor): void {
+  cursor.steps.push({ at: cursor.time + GLOTTIS_MUTE_DELAY, apply: (e) => { e.Glottis.intensity = 0; } });
+}
+
+/**
  * targetDiameter is a target the tract *moves toward*, not an instant jump
  * — at the normal baseline speed, closing takes long enough that the tract
  * spends ~50-70ms audibly narrowing while still voiced, which sounds like a
@@ -394,6 +407,7 @@ function scheduleVowel(cursor: Cursor, phoneme: VowelPhoneme, dur: number, pitch
   const jitteredTenseness = NEUTRAL_TENSENESS + (isStressed ? 0.05 : 0) + (Math.random() - 0.5) * 0.04;
   at(cursor, (e) => {
     e.Glottis.isTouched = true;
+    fadeGlottisIn(e);
     e.Glottis.UIFrequency = jitteredPitch;
     e.Glottis.UITenseness = jitteredTenseness;
     setShape(e, shape);
@@ -430,9 +444,11 @@ function scheduleStop(cursor: Cursor, place: ConsonantPlace, voiced: boolean, cl
   const index = PLACE_INDEX[place];
   at(cursor, (e) => {
     e.Glottis.isTouched = voiced;
-    if (!voiced) e.Glottis.intensity = 0;
+    if (voiced) fadeGlottisIn(e);
+    else fadeGlottisOut(e);
     closeFast(e, constrict(closeInto, index, 3, 0));
   });
+  if (!voiced) scheduleMuteZero(cursor);
   cursor.time += closure;
 
   // The physical transient the model fires on release is real, but its
@@ -463,6 +479,7 @@ function scheduleStop(cursor: Cursor, place: ConsonantPlace, voiced: boolean, cl
   at(cursor, (e) => {
     e.Tract.movementSpeed = 24;
     e.Glottis.isTouched = true;
+    fadeGlottisIn(e);
     e.Glottis.UITenseness = 0.05;
     setShape(e, closeInto);
   });
@@ -501,6 +518,7 @@ function scheduleEjective(cursor: Cursor, place: ConsonantPlace, closeInto: numb
   at(cursor, (e) => {
     e.Tract.movementSpeed = 24;
     e.Glottis.isTouched = true;
+    fadeGlottisIn(e);
     e.Glottis.UITenseness = 1.0;
     setShape(e, closeInto);
   });
@@ -517,6 +535,7 @@ function scheduleImplosive(cursor: Cursor, place: ConsonantPlace, closeInto: num
   const index = PLACE_INDEX[place];
   at(cursor, (e) => {
     e.Glottis.isTouched = true;
+    fadeGlottisIn(e);
     e.Glottis.UIFrequency = 80; // low, resonant pre-voicing — the closest approximation available to true ingressive voicing
     closeFast(e, constrict(closeInto, index, 3, 0));
   });
@@ -538,6 +557,7 @@ function scheduleNasal(cursor: Cursor, place: ConsonantPlace, closeInto: number[
   const pitch = cursor.lastPitch;
   at(cursor, (e) => {
     e.Glottis.isTouched = true;
+    fadeGlottisIn(e);
     e.Glottis.UIFrequency = pitch;
     e.Glottis.UITenseness = NEUTRAL_TENSENESS;
     e.Tract.velumTarget = 0.4;
@@ -569,6 +589,7 @@ function scheduleFricative(cursor: Cursor, place: ConsonantPlace, voiced: boolea
     // shape untouched, is what makes it sound like breath instead of hiss.
     if (isGlottal) {
       e.Glottis.isTouched = true;
+      fadeGlottisIn(e);
       e.Glottis.UIFrequency = pitch;
       e.Glottis.UITenseness = 0.05;
       return;
@@ -584,7 +605,7 @@ function scheduleFricative(cursor: Cursor, place: ConsonantPlace, voiced: boolea
     // supplied entirely separately (playVoiceHum in audio.ts) — a simple
     // decoupled hum, not the physical tract — so it can't reintroduce this.
     e.Glottis.isTouched = false;
-    e.Glottis.intensity = 0;
+    fadeGlottisOut(e);
     // REST_SHAPE, not the anticipated next shape — that's deliberate. Baking
     // the next consonant's target in as the base here (like stops correctly
     // do) diluted this phoneme's own identity for its *entire* hold, not
@@ -596,6 +617,7 @@ function scheduleFricative(cursor: Cursor, place: ConsonantPlace, voiced: boolea
     // moving there on its own.
     setShape(e, constrict(REST_SHAPE, index, 3, 0.15));
   });
+  if (!isGlottal) scheduleMuteZero(cursor);
   cursor.noiseEvents.push({ atOffset: cursor.time, dur, place, voiced, kind: "fricative" });
   void manner;
   cursor.time += dur;
@@ -622,9 +644,11 @@ function scheduleAffricate(cursor: Cursor, place: ConsonantPlace, voiced: boolea
   const index = PLACE_INDEX[place];
   at(cursor, (e) => {
     e.Glottis.isTouched = voiced;
-    if (!voiced) e.Glottis.intensity = 0;
+    if (voiced) fadeGlottisIn(e);
+    else fadeGlottisOut(e);
     closeFast(e, constrict(closeInto, index, 3, 0));
   });
+  if (!voiced) scheduleMuteZero(cursor);
   cursor.time += closure;
   cursor.noiseEvents.push({ atOffset: cursor.time, dur: 0.016, place, voiced, kind: "stopBurst" });
 
@@ -634,9 +658,10 @@ function scheduleAffricate(cursor: Cursor, place: ConsonantPlace, voiced: boolea
     // the anticipated next shape) for the same reason: keeps this brief
     // frication tail's own identity intact instead of diluting it.
     e.Glottis.isTouched = false;
-    e.Glottis.intensity = 0;
+    fadeGlottisOut(e);
     setShape(e, constrict(REST_SHAPE, index, 3, 0.15));
   });
+  scheduleMuteZero(cursor);
   cursor.noiseEvents.push({ atOffset: cursor.time, dur, place, voiced, kind: "fricative" });
   cursor.time += dur;
 }
@@ -651,9 +676,10 @@ function scheduleClick(cursor: Cursor, place: ConsonantPlace, closeInto: number[
   const index = PLACE_INDEX[place];
   at(cursor, (e) => {
     e.Glottis.isTouched = false;
-    e.Glottis.intensity = 0;
+    fadeGlottisOut(e);
     setShape(e, constrict(closeInto, index, 3, 0));
   });
+  scheduleMuteZero(cursor);
   cursor.noiseEvents.push({ atOffset: cursor.time, dur, place, voiced: false, kind: "click" });
   cursor.time += dur;
   at(cursor, (e) => setShape(e, closeInto));
@@ -671,6 +697,7 @@ function scheduleApproximant(cursor: Cursor, phoneme: ConsonantPhoneme): void {
   const pitch = cursor.lastPitch;
   at(cursor, (e) => {
     e.Glottis.isTouched = true;
+    fadeGlottisIn(e);
     e.Glottis.UIFrequency = pitch;
     e.Glottis.UITenseness = NEUTRAL_TENSENESS;
     setShape(e, shape);
@@ -714,6 +741,7 @@ function scheduleTapOrTrill(
     // into `closeInto`, same as a stop's own release into what follows.
     at(cursor, (e) => {
       e.Glottis.isTouched = true;
+      fadeGlottisIn(e);
       setShape(e, constrict(REST_SHAPE, index, 2, 0.1));
     });
     cursor.time += closeDur;
