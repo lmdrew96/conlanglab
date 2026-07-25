@@ -721,7 +721,15 @@ function scheduleTapOrTrill(
     cursor.time += openDur;
   }
   at(cursor, (e) => {
-    e.Tract.movementSpeed = 24; // back to the baseline set in runGestures, not the library's original default
+    // Dropping straight to the 24 baseline here is fine when there's little
+    // ground left to cover (e.g. r->n, both alveolar — the last pulse's
+    // openDur already basically arrived). But when the handoff crosses
+    // places (e.g. ɾ->ŋ, alveolar->velar), the tract is still mid-reshape
+    // when this fires; slowing it to 24 stalls that reshape right before the
+    // nasal's own closeFast (speed 60) yanks it the rest of the way — an
+    // inconsistent slow-then-abrupt motion that reads as a scrape. Staying
+    // at the pulse's own speed through the handoff keeps it moving instead.
+    e.Tract.movementSpeed = opensIntoNasal ? 55 : 24; // back to the baseline set in runGestures, not the library's original default, unless a nasal handoff still needs the runway
     // Same reasoning as scheduleStop's isFinal: the last pulse's `openDur`
     // settles into `closeInto`, which is REST_SHAPE when nothing follows —
     // holding voicing into that open shape reads as an appended vowel.
