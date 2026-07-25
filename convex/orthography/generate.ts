@@ -32,6 +32,7 @@ import type {
   OrthographyParams,
   OrthographyStageData,
   OverflowStrategy,
+  Point,
   ScriptCategory,
   ScriptStyle,
   Seed,
@@ -109,7 +110,6 @@ interface GeometryProfile {
   /** -1..1, a consistent per-script lean applied to every line/curve endpoint so strokes share a "handwriting angle" instead of jittering independently. */
   slant: number;
   curveBulgeRange: [number, number];
-  hookLengthRange: [number, number];
   dotScale: number;
   /**
    * 0 = this script strongly favors geometric/discrete strokes (line, dot)
@@ -137,7 +137,6 @@ function buildGeometryProfile(
     jitterSpread: Math.round(rng.int(rounded ? 5 : 6, rounded ? 12 : 16) * jitterMultiplier),
     slant: rng.float() * 2 - 1,
     curveBulgeRange: rounded ? [rng.int(8, 14), rng.int(16, 28)] : [rng.int(2, 6), rng.int(7, 14)],
-    hookLengthRange: rounded ? [rng.int(12, 20), rng.int(24, 42)] : [rng.int(8, 16), rng.int(18, 34)],
     dotScale: rng.float() * 0.6 + 0.8,
     shapeBias: shapeBiasMin + rng.float() * (shapeBiasMax - shapeBiasMin),
   };
@@ -167,64 +166,170 @@ function heightBand(height: VowelHeight | null, top: number, bottom: number): [n
   return [Math.max(top, center - half), Math.min(bottom, center + half)];
 }
 
-function buildStrokeOfKind(
-  kind: Stroke["kind"],
+const GRID_COLS = 3;
+const GRID_ROWS = 4;
+const FOOTPRINT_HALF_WIDTH_FRACTION = 0.22;
+
+/**
+ * A glyph's local anchor grid (3 columns x 4 rows) — every stroke endpoint
+ * snaps to one of these points instead of landing at a continuously
+ * jittered coordinate. This is the "text, not handwriting" fix: real
+ * constructed scripts (and real typefaces generally) build every letter
+ * from a small shared set of crisp aligned positions; they never wobble
+ * each line segment independently the way the old per-endpoint jitter did.
+ * `slant` shifts the whole grid's column once per script (buildLocalGrid's
+ * one jitterSpread nudge) rather than per stroke, so a script can still
+ * lean without any individual stroke looking shaky.
+ */
+function buildLocalGrid(xBias: number, yBand: [number, number], style: ScriptStyle, geometry: GeometryProfile): Point[][] {
+  const [yTop, yBottom] = yBand;
+  const centerX = gridX(xBias, style, geometry.slant * geometry.jitterSpread);
+  const half = style.viewBoxSize * FOOTPRINT_HALF_WIDTH_FRACTION;
+  const cols = [centerX - half, centerX, centerX + half];
+  const rows = Array.from({ length: GRID_ROWS }, (_, i) => yTop + ((yBottom - yTop) * i) / (GRID_ROWS - 1));
+  return rows.map((y) => cols.map((x) => ({ x, y })));
+}
+
+interface GridCursor {
+  row: number;
+  col: number;
+  point: Point;
+}
+
+const ORTHOGONAL_MOVE_CHANCE = 0.75;
+
+/**
+ * Enumerates every other grid point, split into "orthogonal" (shares a row
+ * or column with `exclude` — produces a clean vertical or horizontal
+ * stroke) and "diagonal" (shares neither). Heavily biased toward
+ * orthogonal: real constructed scripts build letters almost entirely from
+ * verticals/horizontals meeting at corners, with diagonals used sparingly
+ * as an accent, not as the dominant connector. Without this bias, uniform
+ * random picking constantly draws corner-to-corner diagonals that cross
+ * through the glyph — the reason grid-snapped strokes still read as
+ * chaotic scribbles instead of clean blocky letters.
+ */
+function pickGridPoint(grid: Point[][], rng: Rng, exclude: GridCursor): GridCursor {
+  const orthogonal: GridCursor[] = [];
+  const diagonal: GridCursor[] = [];
+  for (let row = 0; row < GRID_ROWS; row++) {
+    for (let col = 0; col < GRID_COLS; col++) {
+      if (row === exclude.row && col === exclude.col) continue;
+      (row === exclude.row || col === exclude.col ? orthogonal : diagonal).push({ row, col, point: grid[row][col] });
+    }
+  }
+  const pool = orthogonal.length > 0 && rng.chance(ORTHOGONAL_MOVE_CHANCE) ? orthogonal : diagonal;
+  return rng.pick(pool.length > 0 ? pool : orthogonal);
+}
+
+const CLOSURE_CHANCE = 0.3;
+
+/**
+ * Builds `count` strokes that read as ONE constructed glyph, grid-snapped
+ * (buildLocalGrid) rather than freely jittered. Two extra rules make it
+ * read as text rather than a doodle: the chain always touches the bottom
+ * grid row (the shared baseline every letter in a real typeface sits on)
+ * at least once, and — once grounded — the final stroke sometimes targets
+ * the glyph's own starting point instead of a fresh one, closing the shape
+ * into a box/loop/triangle the way real constructed scripts constantly do
+ * and the old free-form chain could never produce.
+ */
+interface ConnectedStrokes {
+  strokes: Stroke[];
+  /** The chain's own first point — literally `strokes[0]`'s from/anchor/center. Callers anchor near-top decorative marks here so they share a real coordinate with the chain instead of an independently computed one. */
+  start: Point;
+  /** The chain's own last point — literally the final stroke's to/center. Callers anchor near-bottom decorative marks (e.g. the manner radical) here. */
+  end: Point;
+}
+
+function buildConnectedStrokes(
+  kinds: readonly Stroke["kind"][],
+  count: number,
   xBias: number,
   yBand: [number, number],
   style: ScriptStyle,
   geometry: GeometryProfile,
   rng: Rng,
-): Stroke {
-  const [yTop, yBottom] = yBand;
-  const jitter = geometry.jitterSpread;
-  const lean = geometry.slant * jitter;
-  switch (kind) {
-    case "line": {
-      const x = gridX(xBias, style, rng.int(-jitter, jitter));
-      return { kind: "line", from: { x, y: yTop }, to: { x: x + lean + rng.int(-jitter, jitter), y: yBottom } };
+): ConnectedStrokes {
+  const grid = buildLocalGrid(xBias, yBand, style, geometry);
+  const startCol = geometry.slant < -0.33 ? 0 : geometry.slant > 0.33 ? GRID_COLS - 1 : 1;
+  const start: GridCursor = { row: 0, col: startCol, point: grid[0][startCol] };
+
+  let cursor = start;
+  let grounded = false;
+  const strokes: Stroke[] = [];
+
+  for (let i = 0; i < count; i++) {
+    const kind = pickStrokeKind(kinds, geometry, rng);
+    const isFinal = i === count - 1;
+    const closing = isFinal && i > 0 && grounded && rng.chance(CLOSURE_CHANCE);
+
+    // A dot has one coordinate, not a span — it decorates the pen's current
+    // position rather than moving to a freshly picked point. Advancing it to
+    // an unrelated grid point (like line/curve/hook do) would silently
+    // "teleport" it with nothing drawn in between, reproducing the exact
+    // disconnected-mark bug this function exists to prevent.
+    let target = closing ? start : kind === "dot" ? cursor : pickGridPoint(grid, rng, cursor);
+    if (isFinal && !grounded && kind !== "dot") target = { row: GRID_ROWS - 1, col: target.col, point: grid[GRID_ROWS - 1][target.col] };
+    if (target.row === GRID_ROWS - 1) grounded = true;
+
+    const from = cursor.point;
+    const to = target.point;
+    let stroke: Stroke;
+    switch (kind) {
+      case "line":
+        stroke = { kind: "line", from, to };
+        break;
+      case "curve": {
+        const [bulgeMin, bulgeMax] = geometry.curveBulgeRange;
+        const bulge = rng.int(bulgeMin, bulgeMax) * (rng.chance(0.5) ? 1 : -1);
+        stroke = { kind: "curve", from, control: { x: (from.x + to.x) / 2 + bulge, y: (from.y + to.y) / 2 }, to };
+        break;
+      }
+      case "dot":
+        stroke = { kind: "dot", center: to, radius: style.strokeWidth * geometry.dotScale };
+        break;
+      case "hook": {
+        const dx = to.x - from.x;
+        const dy = to.y - from.y;
+        const [curvMin, curvMax] = geometry.curveBulgeRange;
+        stroke = {
+          kind: "hook",
+          anchor: from,
+          angle: (Math.atan2(dy, dx) * 180) / Math.PI,
+          length: Math.max(4, Math.hypot(dx, dy)),
+          curvature: rng.int(curvMin, curvMax) * (rng.chance(0.5) ? 1 : -1),
+        };
+        break;
+      }
     }
-    case "curve": {
-      const x = gridX(xBias, style, rng.int(-jitter, jitter));
-      const [bulgeMin, bulgeMax] = geometry.curveBulgeRange;
-      const curveAmount = rng.int(bulgeMin, bulgeMax);
-      return {
-        kind: "curve",
-        from: { x, y: yTop },
-        control: { x: x + curveAmount + lean, y: (yTop + yBottom) / 2 },
-        to: { x: x + lean + rng.int(-jitter, jitter), y: yBottom },
-      };
-    }
-    case "dot": {
-      const x = gridX(xBias, style, rng.int(-jitter, jitter));
-      return { kind: "dot", center: { x, y: rng.int(yTop, yBottom) }, radius: style.strokeWidth * geometry.dotScale };
-    }
-    case "hook": {
-      const x = gridX(xBias, style, rng.int(-jitter, jitter));
-      const [lenMin, lenMax] = geometry.hookLengthRange;
-      const [curvMin, curvMax] = geometry.curveBulgeRange;
-      return {
-        kind: "hook",
-        anchor: { x, y: rng.int(yTop, yBottom) },
-        angle: rng.int(0, 359),
-        length: rng.int(lenMin, lenMax),
-        curvature: rng.int(curvMin, curvMax),
-      };
-    }
+    strokes.push(stroke);
+    cursor = target;
   }
+  return { strokes, start: start.point, end: cursor.point };
 }
 
-/** Overflow phonemes (diacriticStacking strategy) get one guaranteed extra mark layered on their otherwise-normal glyph, flagging them as the "added-on" tier — a fixed offset, not RNG-driven, so it never competes with the main strokes' randomization. */
-function buildOverflowMark(xBias: number, style: ScriptStyle): Stroke {
-  return { kind: "dot", center: { x: gridX(xBias, style, -10), y: style.baselineY - 2 }, radius: style.strokeWidth * 0.6 };
+/** Overflow phonemes (diacriticStacking strategy) get one guaranteed extra mark layered on their otherwise-normal glyph, flagging them as the "added-on" tier. Placed exactly at the chain's own `start` (not an independent gridX/baselineY coordinate) so it shares a literal coordinate with the main letterform instead of floating disconnected from it. */
+function buildOverflowMark(anchor: Point, style: ScriptStyle): Stroke {
+  return { kind: "dot", center: anchor, radius: style.strokeWidth * 0.6 };
 }
 
-/** A fixed, non-random tick keyed only by manner (MANNER_RADICAL_ANGLE) — every consonant sharing a manner gets the exact same tiny mark below the baseline, regardless of which stroke kind shapeBias picked for its main strokes. Guarantees "same feature, visibly related" rather than leaving it to chance. */
-function buildMannerRadical(manner: ConsonantPhoneme["features"]["manner"], xBias: number, style: ScriptStyle): Stroke {
+/**
+ * A fixed, non-random tick keyed only by manner (MANNER_RADICAL_ANGLE) —
+ * every consonant sharing a manner gets the exact same tiny mark,
+ * regardless of which stroke kind shapeBias picked for its main strokes.
+ * Starts exactly at the connected chain's own `end` point (its last
+ * stroke's literal to/center coordinate) instead of an independently
+ * computed gridX/baselineY coordinate, then extends outward at its own
+ * angle — reads as an attached flourish off the letterform, not a second,
+ * unrelated floating stroke (the actual mechanism this patch fixes; the
+ * chain itself was already correctly connected before this change, but
+ * every consonant unconditionally got this radical appended disconnected).
+ */
+function buildMannerRadical(manner: ConsonantPhoneme["features"]["manner"], anchor: Point, style: ScriptStyle): Stroke {
   const angleRad = (MANNER_RADICAL_ANGLE[manner] * Math.PI) / 180;
-  const length = 6;
-  const x = gridX(xBias, style, 0);
-  const y = style.baselineY - 4;
-  return { kind: "line", from: { x, y }, to: { x: x + Math.cos(angleRad) * length, y: y + Math.sin(angleRad) * length } };
+  const length = style.viewBoxSize * 0.08;
+  return { kind: "line", from: anchor, to: { x: anchor.x + Math.cos(angleRad) * length, y: anchor.y + Math.sin(angleRad) * length } };
 }
 
 function buildConsonantStrokes(
@@ -238,19 +343,16 @@ function buildConsonantStrokes(
   const xBias = ORIENTATION_BY_PLACE[phoneme.features.place];
   const yBand: [number, number] = [style.xHeightY, style.baselineY];
   const [minStrokes, maxStrokes] = style.strokeCountRange;
-  const strokes: Stroke[] = [];
-  for (let i = 0; i < rng.int(minStrokes, maxStrokes); i++) {
-    strokes.push(buildStrokeOfKind(pickStrokeKind(family, geometry, rng), xBias, yBand, style, geometry, rng));
-  }
-  strokes.push(buildMannerRadical(phoneme.features.manner, xBias, style));
+  const { strokes, start, end } = buildConnectedStrokes(family, rng.int(minStrokes, maxStrokes), xBias, yBand, style, geometry, rng);
+  strokes.push(buildMannerRadical(phoneme.features.manner, end, style));
   if (phoneme.features.voiced) {
-    strokes.push({ kind: "dot", center: { x: gridX(xBias, style, 8), y: style.xHeightY - 6 }, radius: style.strokeWidth });
+    strokes.push({ kind: "dot", center: { x: start.x + 8, y: start.y - 6 }, radius: style.strokeWidth });
   }
   if (phoneme.features.secondary) {
     const angle = SECONDARY_MARK_ANGLE[phoneme.features.secondary];
-    strokes.push({ kind: "hook", anchor: { x: gridX(xBias, style, 10), y: style.xHeightY - 4 }, angle, length: 8, curvature: 10 });
+    strokes.push({ kind: "hook", anchor: start, angle, length: 8, curvature: 10 });
   }
-  if (markOverflow) strokes.push(buildOverflowMark(xBias, style));
+  if (markOverflow) strokes.push(buildOverflowMark(start, style));
   return strokes;
 }
 
@@ -264,14 +366,15 @@ function buildVowelStrokes(
   const xBias = VOWEL_BACKNESS_X[phoneme.features.backness];
   const yBand = heightBand(phoneme.features.height, style.xHeightY, style.baselineY);
   const count = Math.max(1, style.strokeCountRange[0] - 1);
-  const strokes: Stroke[] = [];
-  for (let i = 0; i < count; i++) {
-    strokes.push(buildStrokeOfKind(pickStrokeKind(VOWEL_STROKE_KINDS, geometry, rng), xBias, yBand, style, geometry, rng));
-  }
+  const { strokes, start, end } = buildConnectedStrokes(VOWEL_STROKE_KINDS, count, xBias, yBand, style, geometry, rng);
+  // Anchored exactly at `end` (epsilon 0): unlike consonants, vowels have no
+  // unconditional decorative mark (no manner radical) to guarantee the
+  // connectivity contract on its own, so when this is the only extra stroke
+  // it must itself land on a literal chain coordinate.
   if (phoneme.features.rounded) {
-    strokes.push({ kind: "dot", center: { x: gridX(xBias, style, -8), y: style.baselineY - 4 }, radius: style.strokeWidth });
+    strokes.push({ kind: "dot", center: end, radius: style.strokeWidth });
   }
-  if (markOverflow) strokes.push(buildOverflowMark(xBias, style));
+  if (markOverflow) strokes.push(buildOverflowMark(start, style));
   return strokes;
 }
 
@@ -281,9 +384,9 @@ function buildVowelDiacriticStrokes(phoneme: VowelPhoneme, style: ScriptStyle, g
   const ascenderTop = style.xHeightY * 0.15;
   const ascenderBottom = style.xHeightY * 0.9;
   const yBand = heightBand(phoneme.features.height, ascenderTop, ascenderBottom);
-  const strokes: Stroke[] = [buildStrokeOfKind(pickStrokeKind(VOWEL_STROKE_KINDS, geometry, rng), xBias, yBand, style, geometry, rng)];
+  const { strokes, end } = buildConnectedStrokes(VOWEL_STROKE_KINDS, 1, xBias, yBand, style, geometry, rng);
   if (phoneme.features.rounded) {
-    strokes.push({ kind: "dot", center: { x: gridX(xBias, style, 4), y: ascenderBottom }, radius: style.strokeWidth * 0.8 });
+    strokes.push({ kind: "dot", center: end, radius: style.strokeWidth * 0.8 });
   }
   return strokes;
 }
@@ -307,11 +410,9 @@ function buildSyllableStrokes(
 /** Logographic glyphs have no phoneme features to key off — composed from the full stroke vocabulary across the whole grid instead of a manner/place-constrained family. */
 function buildConceptStrokes(style: ScriptStyle, geometry: GeometryProfile, rng: Rng): Stroke[] {
   const yBand: [number, number] = [style.xHeightY, style.baselineY];
-  const strokes: Stroke[] = [];
-  for (let i = 0; i < rng.int(style.strokeCountRange[0], style.strokeCountRange[1] + 1); i++) {
-    strokes.push(buildStrokeOfKind(pickStrokeKind(ALL_STROKE_KINDS, geometry, rng), rng.float(), yBand, style, geometry, rng));
-  }
-  return strokes;
+  const count = rng.int(style.strokeCountRange[0], style.strokeCountRange[1] + 1);
+  const xBias = rng.float();
+  return buildConnectedStrokes(ALL_STROKE_KINDS, count, xBias, yBand, style, geometry, rng).strokes;
 }
 
 const PREVIEW_SAMPLE_COUNT = 4;
