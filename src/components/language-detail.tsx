@@ -28,6 +28,7 @@ const STAGE_ROUTES: Partial<Record<keyof typeof STAGE_MILESTONE, string>> = {
   lexicon: "lexicon",
   morphology: "morphology",
   syntax: "syntax",
+  orthography: "orthography",
 };
 
 export function LanguageDetail({ id }: { id: string }) {

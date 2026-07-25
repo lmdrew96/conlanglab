@@ -45,7 +45,7 @@ Phonology ──┬──▶ Lexicon ──▶ Morphology ──▶ Syntax
 - **Lexicon** depends on Phonology (roots are built from its sound inventory + phonotactic rules).
 - **Morphology** depends on Phonology directly (affixes are themselves phonologically valid strings) and conceptually informs how the Lexicon's roots inflect/derive.
 - **Syntax** (v1-lite) depends on Morphology (what grammatical categories exist to arrange) but is otherwise the lightest-weight stage.
-- **Orthography** depends on **both** Phonology (mapping sounds to symbols) and Morphology (deciding how affix/word boundaries are represented in writing — e.g., hyphenation, spacing, ligatures at morpheme joins).
+- **Orthography** depends on **both** Phonology (mapping sounds to symbols) and Morphology (deciding how affix/word boundaries are represented in writing — e.g., hyphenation, spacing, ligatures at morpheme joins). The **syllabic** and **logographic** script categories specifically also read Lexicon (a syllabary's glyph set is bounded to the CV/V syllables actually attested in generated roots, and a logographic script's glyphs are keyed one-per-concept) — already safe given Lexicon generates well before Orthography in pipeline order (§15), just not previously called out in this diagram.
 
 ### Not a sealed pipeline
 
@@ -227,7 +227,7 @@ In scope for v1, with **visual rendering** — generated glyphs actually appear 
 
 ### 8.1 Script Type Selection
 
-The user chooses the **script category** (alphabetic, syllabic/moraic, logographic, abjad, abugida, etc.) — this determines the sound-to-symbol mapping logic and depends on Phonology (Section 4) for the sound inventory being represented and Morphology (Section 5) for how morpheme/word boundaries are handled in writing (per Section 3's dependency graph).
+The user chooses the **script category** (alphabetic, syllabic/moraic, logographic, abjad, abugida, etc.) — this determines the sound-to-symbol mapping logic and depends on Phonology (Section 4) for the sound inventory being represented and Morphology (Section 5) for how morpheme/word boundaries are handled in writing (per Section 3's dependency graph). The syllabic and logographic categories additionally read Lexicon (Section 6) — see Section 3's dependency note.
 
 ### 8.2 Invented vs. Real-Like Aesthetic
 

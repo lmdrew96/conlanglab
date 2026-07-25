@@ -40,6 +40,7 @@ import type {
   ReduplicationShape,
   Seed,
   SuppletionData,
+  WordSegment,
 } from "./types";
 import type { ConsonantPhoneme, ConsonantPlace, PhonologyData, VowelPhoneme } from "../phonology/types";
 import { CORE_LIST } from "../lexicon/content";
@@ -80,7 +81,8 @@ export function resolvePhonemes(
   return resolved;
 }
 
-function isVowel(p: ConsonantPhoneme | VowelPhoneme): p is VowelPhoneme {
+/** Exported for reuse by convex/orthography/generate.ts's grapheme grouping. */
+export function isVowel(p: ConsonantPhoneme | VowelPhoneme): p is VowelPhoneme {
   return "height" in p.features;
 }
 
@@ -485,6 +487,30 @@ export interface AssembledWord {
   form: string;
   phonemeIds: string[];
   stressedPhonemeIndex: number | undefined;
+  segments: WordSegment[];
+}
+
+/** Shifts every segment at or after `insertPos` by `insertLen`, splitting a segment that straddles the insertion point into two pieces of the same source (used only by infix, the one strategy that can land inside an existing segment rather than at its edge). */
+function shiftSegmentsForInsert(segments: WordSegment[], insertPos: number, insertLen: number): WordSegment[] {
+  if (insertLen === 0) return segments;
+  const result: WordSegment[] = [];
+  for (const seg of segments) {
+    if (seg.end <= insertPos) {
+      result.push(seg);
+    } else if (seg.start >= insertPos) {
+      result.push({ start: seg.start + insertLen, end: seg.end + insertLen, source: seg.source });
+    } else {
+      result.push({ start: seg.start, end: insertPos, source: seg.source });
+      result.push({ start: insertPos + insertLen, end: seg.end + insertLen, source: seg.source });
+    }
+  }
+  return result;
+}
+
+/** Inserts a new segment and keeps the array sorted by start — skips zero-width segments (e.g. a reduplication copy that matched nothing). */
+function insertSegment(segments: WordSegment[], seg: WordSegment): WordSegment[] {
+  if (seg.end <= seg.start) return segments;
+  return [...segments, seg].sort((a, b) => a.start - b.start);
 }
 
 /**
@@ -503,6 +529,7 @@ export function applyAffixesToRoot(
 ): AssembledWord {
   let phonemes = resolvePhonemes(root.phonemeIds, phonology) ?? [];
   let stressIndex = root.stressedPhonemeIndex;
+  let segments: WordSegment[] = [{ start: 0, end: phonemes.length, source: "root" }];
 
   const applyOne = (affix: MorphologyAffixData) => {
     switch (affix.strategy) {
@@ -512,14 +539,19 @@ export function applyAffixesToRoot(
         const repaired = resolveBoundary(affixPhonemes, phonemes, allomorphy, phonology);
         // All growth from prefixing (and any epenthesis it triggers) lands
         // before the root's original content, so the stressed phoneme's
-        // index shifts by exactly the net length added on this side.
-        if (stressIndex !== undefined) stressIndex += repaired.length - rootLength;
+        // index — and every existing segment — shifts by exactly the net
+        // length added on this side.
+        const delta = repaired.length - rootLength;
+        if (stressIndex !== undefined) stressIndex += delta;
+        segments = insertSegment(shiftSegmentsForInsert(segments, 0, delta), { start: 0, end: delta, source: affix.id });
         phonemes = repaired;
         break;
       }
       case "suffix": {
         const affixPhonemes = resolvePhonemes(affix.phonemeIds, phonology) ?? [];
+        const beforeLength = phonemes.length;
         phonemes = resolveBoundary(phonemes, affixPhonemes, allomorphy, phonology);
+        segments = insertSegment(segments, { start: beforeLength, end: phonemes.length, source: affix.id });
         break;
       }
       case "infix": {
@@ -527,6 +559,11 @@ export function applyAffixesToRoot(
         const insertAt = Math.min(1, phonemes.length);
         phonemes = [...phonemes.slice(0, insertAt), ...affixPhonemes, ...phonemes.slice(insertAt)];
         if (stressIndex !== undefined && stressIndex >= insertAt) stressIndex += affixPhonemes.length;
+        segments = insertSegment(shiftSegmentsForInsert(segments, insertAt, affixPhonemes.length), {
+          start: insertAt,
+          end: insertAt + affixPhonemes.length,
+          source: affix.id,
+        });
         break;
       }
       case "circumfix": {
@@ -534,8 +571,12 @@ export function applyAffixesToRoot(
         const closingPhonemes = resolvePhonemes(affix.circumfixClosingPhonemeIds ?? [], phonology) ?? [];
         const rootLength = phonemes.length;
         const withOpening = resolveBoundary(openingPhonemes, phonemes, allomorphy, phonology);
+        const openingDelta = withOpening.length - rootLength;
+        if (stressIndex !== undefined) stressIndex += openingDelta;
+        segments = insertSegment(shiftSegmentsForInsert(segments, 0, openingDelta), { start: 0, end: openingDelta, source: affix.id });
+        const beforeClosingLength = withOpening.length;
         const withBoth = resolveBoundary(withOpening, closingPhonemes, allomorphy, phonology);
-        if (stressIndex !== undefined) stressIndex += withOpening.length - rootLength;
+        segments = insertSegment(segments, { start: beforeClosingLength, end: withBoth.length, source: affix.id });
         phonemes = withBoth;
         break;
       }
@@ -543,10 +584,14 @@ export function applyAffixesToRoot(
         const copy = [...phonemes];
         const rootLength = phonemes.length;
         if (affix.reduplicationPlacement === "after") {
+          const beforeLength = phonemes.length;
           phonemes = resolveBoundary(phonemes, copy, allomorphy, phonology);
+          segments = insertSegment(segments, { start: beforeLength, end: phonemes.length, source: affix.id });
         } else {
           const repaired = resolveBoundary(copy, phonemes, allomorphy, phonology);
-          if (stressIndex !== undefined) stressIndex += repaired.length - rootLength;
+          const delta = repaired.length - rootLength;
+          if (stressIndex !== undefined) stressIndex += delta;
+          segments = insertSegment(shiftSegmentsForInsert(segments, 0, delta), { start: 0, end: delta, source: affix.id });
           phonemes = repaired;
         }
         break;
@@ -562,15 +607,20 @@ export function applyAffixesToRoot(
         }
         const rootLength = phonemes.length;
         if (affix.reduplicationPlacement === "after") {
+          const beforeLength = phonemes.length;
           phonemes = resolveBoundary(phonemes, copy, allomorphy, phonology);
+          segments = insertSegment(segments, { start: beforeLength, end: phonemes.length, source: affix.id });
         } else {
           const repaired = resolveBoundary(copy, phonemes, allomorphy, phonology);
-          if (stressIndex !== undefined) stressIndex += repaired.length - rootLength;
+          const delta = repaired.length - rootLength;
+          if (stressIndex !== undefined) stressIndex += delta;
+          segments = insertSegment(shiftSegmentsForInsert(segments, 0, delta), { start: 0, end: delta, source: affix.id });
           phonemes = repaired;
         }
         break;
       }
       case "ablaut": {
+        // In-place identity swap, no length change — existing segments stay valid as-is.
         if (affix.ablautFrom && affix.ablautTo) {
           const idx = phonemes.findIndex((p) => p.id === affix.ablautFrom);
           if (idx >= 0) {
@@ -589,7 +639,15 @@ export function applyAffixesToRoot(
             rebuilt.push(consonantSkeleton[i]);
             if (melody[i]) rebuilt.push(melody[i]);
           }
-          if (rebuilt.length > 0) phonemes = rebuilt;
+          if (rebuilt.length > 0) {
+            phonemes = rebuilt;
+            // Interleaving rebuilds the whole sequence from the extracted
+            // consonant skeleton, so prior segment attribution no longer
+            // maps cleanly onto positions — collapse to one root span
+            // (Orthography renders this strategy as a diacritic on the
+            // base glyph, not a literal segment boundary, so this is safe).
+            segments = [{ start: 0, end: phonemes.length, source: "root" }];
+          }
         }
         break;
       }
@@ -602,6 +660,7 @@ export function applyAffixesToRoot(
     form: phonemes.map((p) => p.ipa).join(""),
     phonemeIds: phonemes.map((p) => p.id),
     stressedPhonemeIndex: stressIndex,
+    segments,
   };
 }
 

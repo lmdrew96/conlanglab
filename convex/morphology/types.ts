@@ -115,6 +115,22 @@ export interface AllomorphyData {
 }
 
 /**
+ * Which contiguous span of an AssembledWord's phoneme sequence came from the
+ * root vs. which attached affix — additive on AssembledWord (M6 Orthography
+ * needs this to render boundary ligatures/diacritics at affix junctions,
+ * design doc Section 8.3). "root" is the sole segment for a bare word (no
+ * affixes attached). ablaut/templatic don't add a segment — they modify
+ * root phonemes in place rather than concatenating, so there's no clean
+ * junction to draw; Orthography routes those two strategies to a
+ * diacritic-on-base-glyph treatment instead of a literal segment boundary.
+ */
+export interface WordSegment {
+  start: number; // inclusive index into AssembledWord.phonemeIds
+  end: number; // exclusive
+  source: "root" | string; // string = MorphologyAffixData.id
+}
+
+/**
  * Section 5.2's suppletion: a specific (root, category, value) cell gets an
  * arbitrary override form instead of the normal affix — controlled,
  * low-frequency "spice" applied only to a language's highest-frequency

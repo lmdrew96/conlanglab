@@ -6,6 +6,7 @@ import { freshSeed } from "../lib/rng";
 import { diffLexicon } from "./diff";
 import { generateLexicon, regenerateSingleItem } from "./generate";
 import { flagStaleDerivedItems } from "./staleness";
+import { flagStaleOrthographyForLexicon } from "../orthography/staleness";
 import { DEFAULT_LEXICON_PARAMS } from "./types";
 import type { LexiconSnapshot } from "./diff";
 import type { LexiconItemData, LexiconStageData } from "./types";
@@ -186,6 +187,7 @@ export const reroll = mutation({
     });
 
     await writeCollection(ctx, { languageId, lexiconId: stageRow._id, itemRows, items, stageData: stage });
+    await flagStaleOrthographyForLexicon(ctx, languageId);
     await appendHistory(ctx, {
       languageId,
       stage: "lexicon",
@@ -222,6 +224,7 @@ export const nudge = mutation({
     });
 
     await writeCollection(ctx, { languageId, lexiconId: stageRow._id, itemRows, items, stageData: stage });
+    await flagStaleOrthographyForLexicon(ctx, languageId);
     await appendHistory(ctx, {
       languageId,
       stage: "lexicon",
@@ -267,6 +270,7 @@ export const regenerateItem = mutation({
       if (row) await ctx.db.patch(row._id, { data: item, staleSince: null });
     }
     await flagStaleDerivedItems(ctx, languageId);
+    await flagStaleOrthographyForLexicon(ctx, languageId);
 
     const nextItems = allItems.map((i) => updated.find((u) => u.id === i.id) ?? i);
     await appendHistory(ctx, {
@@ -311,6 +315,7 @@ export const regenerateStale = mutation({
       }
     }
     await flagStaleDerivedItems(ctx, languageId);
+    await flagStaleOrthographyForLexicon(ctx, languageId);
 
     await appendHistory(ctx, {
       languageId,
@@ -414,6 +419,7 @@ export const revertToHistoryEntry = mutation({
       items: reconstructed.items,
       stageData: nextStage,
     });
+    await flagStaleOrthographyForLexicon(ctx, languageId);
     await appendHistory(ctx, { languageId, stage: "lexicon", data: reconstructed, trigger: "edit", diffFn: diffLexicon });
   },
 });

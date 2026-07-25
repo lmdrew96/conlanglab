@@ -9,6 +9,7 @@ import { freshSeed } from "../lib/rng";
 // stage polling phonology.
 import { flagStaleLexiconItems } from "../lexicon/staleness";
 import { flagStaleMorphologyItems } from "../morphology/staleness";
+import { flagStaleOrthographyForPhonology } from "../orthography/staleness";
 import { diffPhonology } from "./diff";
 import { generatePhonology } from "./generate";
 import { ALL_TARGETS, DEFAULT_PARAMS } from "./types";
@@ -110,6 +111,7 @@ export const reroll = mutation({
     if (targets.includes("inventory")) {
       await flagStaleLexiconItems(ctx, languageId, currentPhonemeIds(data));
       await flagStaleMorphologyItems(ctx, languageId, currentPhonemeIds(data));
+      await flagStaleOrthographyForPhonology(ctx, languageId, currentPhonemeIds(data));
     }
     await appendHistory(ctx, { languageId, stage: "phonology", data, trigger: "reroll", diffFn: diffPhonology });
   },
@@ -137,6 +139,7 @@ export const nudge = mutation({
     if (targets.includes("inventory")) {
       await flagStaleLexiconItems(ctx, languageId, currentPhonemeIds(data));
       await flagStaleMorphologyItems(ctx, languageId, currentPhonemeIds(data));
+      await flagStaleOrthographyForPhonology(ctx, languageId, currentPhonemeIds(data));
     }
     await appendHistory(ctx, { languageId, stage: "phonology", data, trigger: "nudge", diffFn: diffPhonology });
   },
@@ -312,6 +315,7 @@ export const revertToHistoryEntry = mutation({
     // only check when the "inventory" target was actually in play.
     await flagStaleLexiconItems(ctx, languageId, currentPhonemeIds(reconstructed));
     await flagStaleMorphologyItems(ctx, languageId, currentPhonemeIds(reconstructed));
+    await flagStaleOrthographyForPhonology(ctx, languageId, currentPhonemeIds(reconstructed));
     await appendHistory(ctx, {
       languageId,
       stage: "phonology",
