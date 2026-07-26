@@ -540,13 +540,35 @@ function scheduleStop(cursor: Cursor, place: ConsonantPlace, voiced: boolean, cl
   cursor.noiseEvents.push({ atOffset: cursor.time, dur: 0.016, place, voiced, kind: "stopBurst" });
 
   if (voiced) {
+    // Releasing straight into `closeInto` is the right target when `next`
+    // is a vowel: closeInto IS the vowel's own broad articulatory shape, so
+    // the transition already carries THIS consonant's own place (`index`
+    // was coarticulated toward the vowel above). But when `next` is
+    // ANOTHER CONSONANT, closeInto = anticipatedShape(next) is a function
+    // of next ALONE — it carries zero information about where this
+    // consonant's own closure was. Two different-place stops releasing
+    // into the same following consonant therefore converge onto an
+    // IDENTICAL target, differing only in the ~16ms burst above — real
+    // place cues live in the formant transition off a stop's OWN place in
+    // the ~20-40ms right after release, which this skipped entirely.
+    // Reported as "/g/ sounds like /b/" in clusters like /gɾ/. A brief
+    // release locus at this consonant's own place (partially open, not the
+    // full closure and not wide-open REST either) before moving on to
+    // `closeInto` restores that transition.
+    const releasesIntoConsonant = next !== undefined && !isVowelUnit(next);
     at(cursor, (e) => {
       e.Tract.movementSpeed = 24;
       e.Glottis.isTouched = !isFinal;
       if (!isFinal) e.Glottis.UITenseness = NEUTRAL_TENSENESS;
-      setShape(e, closeInto);
+      setShape(e, releasesIntoConsonant ? constrict(REST_SHAPE, index, 3, 0.5) : closeInto);
     });
-    cursor.time += 0.11;
+    if (releasesIntoConsonant) {
+      cursor.time += 0.03;
+      at(cursor, (e) => setShape(e, closeInto));
+      cursor.time += 0.08;
+    } else {
+      cursor.time += 0.11;
+    }
     return;
   }
 
