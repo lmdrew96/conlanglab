@@ -73,6 +73,31 @@ export interface PinkTromboneModule {
     targetDiameter: Float64Array;
     velumTarget: number;
     movementSpeed: number;
+    /**
+     * The physical waveguide's own traveling-wave delay lines (right-going/
+     * left-going) — this IS the sound actually circulating in the tube,
+     * distinct from `diameter`/`targetDiameter` (the tube's SHAPE). Decays
+     * only ×0.999/sample (~100ms to fall to 1%), so residual wave energy
+     * from whatever the PREVIOUS play was doing when interrupted survives
+     * well into a new one — a genuinely different kind of "memory" than the
+     * shape reset already handles. noseR/noseL are the same thing for the
+     * nasal passage.
+     */
+    R: Float64Array;
+    L: Float64Array;
+    noseR: Float64Array;
+    noseL: Float64Array;
+    /**
+     * Index of the tract's current full closure (diameter<=0), or -1 when
+     * open everywhere — reshapeTract fires a release transient the instant
+     * this transitions to -1 (see addTransient). Not reset alongside
+     * diameter/targetDiameter: if a previous play left this at a real
+     * index and the new play's reset shape has no closure anywhere, the
+     * very next reshapeTract call reads that stale index as "just
+     * released" and fires a transient nothing in the new schedule asked
+     * for, before any of its own gestures even run.
+     */
+    lastObstruction: number;
   };
 }
 
@@ -240,6 +265,22 @@ export async function runGestures(steps: GestureStep[]): Promise<PinkTromboneMod
   engine.Glottis.oldTenseness = 0.6;
   engine.Glottis.newTenseness = 0.6;
   engine.Glottis.intensity = 1;
+  // The actual sound circulating in the tube (see Tract.R/L's own comment)
+  // — resetting diameter/targetDiameter alone changes the tube's SHAPE, not
+  // the wave energy already traveling through it. Left alone, that residual
+  // energy (up to ~100ms of decay) bleeds into the start of a new play,
+  // most audibly distorting exactly the release-transient window a stop's
+  // own place cue depends on — reported directly: the very first play after
+  // a page load (truly empty tube) sounds right, and EVERY play after that
+  // (regardless of what played before) collapses toward a different,
+  // generic-sounding place. lastObstruction=-1 also prevents a stale
+  // "just released" transient firing from wherever the previous play's
+  // tract happened to be closed when it got interrupted.
+  engine.Tract.R.fill(0);
+  engine.Tract.L.fill(0);
+  engine.Tract.noseR.fill(0);
+  engine.Tract.noseL.fill(0);
+  engine.Tract.lastObstruction = -1;
   for (const step of steps) {
     const id = setTimeout(() => step.apply(engine), Math.max(0, step.at * 1000));
     pendingTimeouts.push(id);
