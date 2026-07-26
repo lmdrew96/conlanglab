@@ -351,7 +351,11 @@ function anticipatedShape(unit: ConsonantPhoneme | VowelPhoneme): number[] {
 // invalidating the hand-measured vowel formant table above, so pitch (+ a
 // touch more vocal tension, i.e. less breathy/"soft-spoken") is the only
 // lever available for shifting the perceived voice younger/more feminine.
-const VOICED_PITCH = 175;
+// Was 175 — reported as sounding "mopey"/depressed, and 175 sat below the
+// 200-220 average this comment already names as the target; splitting that
+// range lands the register somewhere a listener reads as awake rather than
+// low-and-flat.
+const VOICED_PITCH = 205;
 const NEUTRAL_TENSENESS = 0.6;
 
 /**
@@ -468,7 +472,11 @@ function scheduleVowel(cursor: Cursor, phoneme: VowelPhoneme, dur: number, pitch
     const fallSteps = 4;
     for (let s = 1; s <= fallSteps; s++) {
       const stepFrac = s / fallSteps;
-      const target = jitteredPitch * (1 - 0.06 * stepFrac);
+      // Was 0.06 — stacked on top of the declination contour's own droop,
+      // that read as the voice sagging away rather than a plain statement
+      // fall (reported as "dragging"/"mopey"). 0.045 keeps the fall audible
+      // as an end-of-utterance cue without compounding into a slump.
+      const target = jitteredPitch * (1 - 0.045 * stepFrac);
       cursor.steps.push({ at: cursor.time + dur * (fallStartFrac + (1 - fallStartFrac) * stepFrac), apply: (e) => { e.Glottis.UIFrequency = target; } });
     }
   }
@@ -846,7 +854,10 @@ export function scheduleUnits(units: Array<ConsonantPhoneme | VowelPhoneme>, str
       const isLast = i === units.length - 1;
       const pitch = contourPitch(vowelIndex, totalVowels);
       const isStressed = hasStressContrast && i === stressedIndex;
-      let dur = isLast ? 0.32 : 0.24;
+      // Was 0.32/0.24 — reported as "slow and drawn out; dragging." Trimmed
+      // by about a fifth, same final/non-final ratio, still long enough to
+      // read as deliberate articulation rather than clipped.
+      let dur = isLast ? 0.25 : 0.19;
       if (hasStressContrast) dur *= isStressed ? 1.25 : 0.85;
       scheduleVowel(cursor, unit, dur, pitch, i === lastVowelPosition, isStressed);
       vowelIndex++;
