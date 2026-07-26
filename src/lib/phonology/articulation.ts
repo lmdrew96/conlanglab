@@ -537,7 +537,22 @@ function scheduleStop(cursor: Cursor, place: ConsonantPlace, voiced: boolean, cl
   // sounded nearly identical) — a short place-colored burst layered on top
   // (same pattern as the fricative noise layer) makes the distinction
   // reliable instead of hoping the tract's own reflection carries it.
-  cursor.noiseEvents.push({ atOffset: cursor.time, dur: 0.016, place, voiced, kind: "stopBurst" });
+  //
+  // Before a following VOWEL, that burst has a whole formant transition
+  // backing it up (the release glide below moves toward the vowel's own
+  // distinct shape) — 16ms of burst is plenty. Before a following
+  // CONSONANT, `closeInto` is anticipatedShape(next) — a target that
+  // depends ONLY on the next consonant's place, not this one's (see
+  // anticipatedShape) — so the release glide carries no distinguishing
+  // information at all; the burst is the ONLY reliable place cue in that
+  // context. Confirmed by direct A/B: /kla/ and /gɾ/ (stop before a
+  // consonant) read as ambiguous/context-flippable; /tʃetʃ/ (affricate
+  // before a vowel, and word-finally — no stop-before-consonant case at
+  // all) does not. A longer burst gives that one surviving cue more
+  // energy to hold up under context.
+  const isBeforeConsonant = next !== undefined && !isVowelUnit(next);
+  const burstDur = isBeforeConsonant ? 0.03 : 0.016;
+  cursor.noiseEvents.push({ atOffset: cursor.time, dur: burstDur, place, voiced, kind: "stopBurst" });
 
   if (voiced) {
     at(cursor, (e) => {
@@ -559,7 +574,7 @@ function scheduleStop(cursor: Cursor, place: ConsonantPlace, voiced: boolean, cl
     // of ms, not 110 — cutting straight to the next consonant's own
     // scheduling (which starts its own closing gesture immediately)
     // removes the gap instead of trying to fill it with more content.
-    cursor.time += next !== undefined && !isVowelUnit(next) ? 0.02 : 0.11;
+    cursor.time += isBeforeConsonant ? 0.02 : 0.11;
     return;
   }
 
@@ -569,7 +584,10 @@ function scheduleStop(cursor: Cursor, place: ConsonantPlace, voiced: boolean, cl
   // acoustically; without it the release read as a near-silent transient.
   // This puff itself is fine even syllable-finally (it's breathy noise, not
   // a vowel) — only the modal-voicing resumption after it needs suppressing.
-  // Duration is real VOT, not a flat guess — see VOT_BY_PLACE.
+  // Duration is real VOT, not a flat guess — see VOT_BY_PLACE. Same
+  // before-a-consonant shortening as the voiced branch above (VOT is a
+  // real aspiration phase, not glide time, so it's untouched — only the
+  // trailing modal-voicing settle shrinks).
   at(cursor, (e) => {
     e.Tract.movementSpeed = 24;
     e.Glottis.isTouched = true;
@@ -582,7 +600,7 @@ function scheduleStop(cursor: Cursor, place: ConsonantPlace, voiced: boolean, cl
     e.Glottis.isTouched = !isFinal;
     if (!isFinal) e.Glottis.UITenseness = NEUTRAL_TENSENESS;
   });
-  cursor.time += 0.06;
+  cursor.time += isBeforeConsonant ? 0.02 : 0.06;
 }
 
 function scheduleEjective(cursor: Cursor, place: ConsonantPlace, closeInto: number[], isFinal: boolean, next: ConsonantPhoneme | VowelPhoneme | undefined): void {
