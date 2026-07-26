@@ -44,6 +44,21 @@ export const AESTHETIC_STYLE_PRESETS: Record<Aesthetic, Omit<ScriptStyle, "versi
  * "typeface" identity — while the allowed pool itself never changes, so
  * "same manner → same family" coherence is untouched; only which member of
  * that family gets favored shifts per script.
+ *
+ * stop/trill/tap/lateralApproximant used to all share the identical
+ * {line,hook} pool, so pickStrokeKind's shapeBias-weighted pick couldn't
+ * distinguish them at a shared place of articulation — glyphs read as
+ * visually uniform regardless of RNG luck, not just occasionally. Each of
+ * these four now draws from a different pool. "dot" costs more than the
+ * others here (render.ts's glyphToSvgPath can never merge it into the
+ * surrounding chain — it's always its own SVG subpath, unlike line/curve/
+ * hook), so it's introduced to only one of the four (tap, where a single
+ * point-contact "dot" is also the most phonetically apt) rather than
+ * reused across several, keeping the reference-font contour-count target
+ * from creeping back up. trill instead gets a richer non-dot pool (all
+ * three "free" kinds) for its own distinct identity. Also decouples
+ * lateralApproximant from nasal ({hook,dot}): they now share no stroke kind
+ * at all.
  */
 export const STROKE_FAMILY_BY_MANNER: Record<ConsonantManner, Stroke["kind"][]> = {
   stop: ["line", "hook"],
@@ -51,9 +66,9 @@ export const STROKE_FAMILY_BY_MANNER: Record<ConsonantManner, Stroke["kind"][]> 
   fricative: ["curve", "line"],
   affricate: ["line", "curve"],
   approximant: ["curve", "hook", "line"],
-  lateralApproximant: ["line", "hook"],
-  trill: ["hook", "line"],
-  tap: ["hook", "line"],
+  lateralApproximant: ["line", "curve"],
+  trill: ["line", "curve", "hook"],
+  tap: ["dot", "hook"],
   lateralFricative: ["curve", "hook", "dot"],
   click: ["dot", "line", "hook"],
   ejective: ["line", "dot", "curve"],

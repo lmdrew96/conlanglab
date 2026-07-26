@@ -6,7 +6,7 @@
 // that description into an actual SVG path string is a distinct, always-
 // re-derivable rendering step, never itself the stored artifact.
 
-import type { Glyph, ScriptStyle, Stroke } from "./types";
+import type { Glyph, Point, ScriptStyle, Stroke } from "./types";
 
 export function strokeToSvgPath(stroke: Stroke): string {
   switch (stroke.kind) {
@@ -32,9 +32,75 @@ export function strokeToSvgPath(stroke: Stroke): string {
   }
 }
 
-/** All of a glyph's strokes as one multi-subpath `d` attribute. */
+/** The point a stroke's own SVG path physically starts drawing from — a dot's is its arc's own M point (`left`), not its `center`. */
+function strokeDrawStart(stroke: Stroke): Point {
+  switch (stroke.kind) {
+    case "line":
+    case "curve":
+      return stroke.from;
+    case "hook":
+      return stroke.anchor;
+    case "dot":
+      return { x: stroke.center.x - stroke.radius, y: stroke.center.y };
+  }
+}
+
+/** The point a stroke's own SVG path physically ends at — a dot's two arcs close back to its own start. */
+function strokeDrawEnd(stroke: Stroke): Point {
+  switch (stroke.kind) {
+    case "line":
+    case "curve":
+      return stroke.to;
+    case "dot":
+      return strokeDrawStart(stroke);
+    case "hook": {
+      const rad = (stroke.angle * Math.PI) / 180;
+      return { x: stroke.anchor.x + Math.cos(rad) * stroke.length, y: stroke.anchor.y + Math.sin(rad) * stroke.length };
+    }
+  }
+}
+
+// A hook's rendered endpoint is *reconstructed* from angle/length (itself
+// derived from a from/to vector via atan2, then round-tripped back through
+// degrees→radians and cos/sin) rather than stored directly, and `length`
+// floors at 4 units — so it lands within a couple of units of the next
+// stroke's true start, essentially never bit-identical. Strict `===` would
+// silently fail almost every merge immediately after a hook (hook appears in
+// nearly every manner's stroke pool), reproducing the exact fragmentation
+// this function exists to fix. Same tolerance the generator's own test suite
+// already uses for "is this coordinate shared" checks.
+const MERGE_EPSILON = 2;
+
+function pointsMatch(a: Point, b: Point): boolean {
+  return Math.hypot(a.x - b.x, a.y - b.y) <= MERGE_EPSILON;
+}
+
+/** A stroke's path command with its leading moveto stripped — only valid when the pen is already sitting at this stroke's own draw-start point. */
+function strokeToSvgPathContinuation(stroke: Stroke): string {
+  return strokeToSvgPath(stroke).replace(/^M\s+[\d.-]+\s+[\d.-]+\s+/, "");
+}
+
+/**
+ * All of a glyph's strokes as one `d` attribute, merging consecutive strokes
+ * that already touch at a shared coordinate into a single SVG subpath
+ * instead of giving every Stroke object its own "M" — buildConnectedStrokes
+ * (generate.ts) guarantees chain segments share endpoints specifically so
+ * they read as one continuous letterform, not N independent marks. "dot"
+ * strokes always keep their own M regardless of coordinate match: a dot is a
+ * closed loop (two arcs back to its own start), not a shape a line/curve can
+ * smoothly continue into — it's legitimately its own contour, same as a real
+ * "i" dot, whether it's the chain's own decorative dot or the one appended
+ * mark a glyph gets (voiced/secondary/overflow).
+ */
 export function glyphToSvgPath(glyph: Glyph): string {
-  return glyph.strokes.map(strokeToSvgPath).join(" ");
+  const parts: string[] = [];
+  let pen: Point | null = null;
+  for (const stroke of glyph.strokes) {
+    const canContinue = stroke.kind !== "dot" && pen !== null && pointsMatch(pen, strokeDrawStart(stroke));
+    parts.push(canContinue ? strokeToSvgPathContinuation(stroke) : strokeToSvgPath(stroke));
+    pen = strokeDrawEnd(stroke);
+  }
+  return parts.join(" ");
 }
 
 export function scriptStyleViewBox(style: ScriptStyle): string {

@@ -64,31 +64,29 @@ export function syllableGlyphId(consonantId: string | null, vowelId: string): st
 const STYLE_SALT = 0xc0ffee;
 
 /**
- * `strokeWidth`/`strokeCountRange` used to come straight off the 2-entry
- * AESTHETIC_STYLE_PRESETS table, so every script sharing an aesthetic had
- * byte-identical "visual weight" (line thickness, glyph density) — part of
- * why regenerated scripts all looked like the same font. Now derived per
- * (aesthetic, seed.base) within an aesthetic-appropriate envelope: invented
- * stays the thinner/sparser archetype and realLike the heavier/denser one
- * on average, but two scripts of the same aesthetic can still land anywhere
- * in that envelope — one bold and minimal, another thin and elaborate.
+ * `strokeWidth` used to come straight off the 2-entry AESTHETIC_STYLE_PRESETS
+ * table, so every script sharing an aesthetic had byte-identical "visual
+ * weight" (line thickness, glyph density) — part of why regenerated scripts
+ * all looked like the same font. Now derived per (aesthetic, seed.base)
+ * within an aesthetic-appropriate envelope: invented stays the
+ * thinner/sparser archetype and realLike the heavier/denser one on average,
+ * but two scripts of the same aesthetic can still land anywhere in that
+ * envelope — one bold and minimal, another thin and elaborate.
  *
- * `strokeCountRange`'s min is now fixed at 1 (every glyph's chain can be a
- * single stroke) with only the max varying per script — measured against 15
- * reference constructed-script fonts, a real letterform averages ~1.4
- * contours/glyph (fontTools contour count across A-Z), and this chain count
- * is the dominant term in that total (each Stroke is rendered as its own SVG
- * subpath — see render.ts's glyphToSvgPath — so a wider count range directly
- * inflates the measured contour average, independent of decorative marks).
- * The old [1-2, 3-5]/[2-3, 4-6] ranges averaged 3-4 chain strokes alone,
- * several times denser than any reference font but the two outliers.
+ * `strokeCountRange` comes straight from AESTHETIC_STYLE_PRESETS again
+ * (invented [2,4], realLike [2,5]) — it was temporarily pinned to near-1 by
+ * the mark-restraint patch to fight contour-count inflation, but that
+ * inflation was actually render.ts's glyphToSvgPath giving every chain
+ * segment its own SVG "M" even when segments already share coordinates. Now
+ * that connected segments merge into one subpath, a longer chain no longer
+ * inflates the measured contour count, so there's no more reason to keep
+ * glyphs near-constant-length.
  */
 export function buildScriptStyle(aesthetic: Aesthetic, seedBase: number): ScriptStyle {
   const preset = AESTHETIC_STYLE_PRESETS[aesthetic];
   const rng = new Rng(deriveSeed(seedBase, STYLE_SALT));
   const strokeWidth = aesthetic === "invented" ? rng.int(3, 6) : rng.int(2, 5);
-  const strokeCountRange: [number, number] = [1, rng.chance(aesthetic === "invented" ? 0.15 : 0.25) ? 2 : 1];
-  return { version: 1, ...preset, strokeWidth, strokeCountRange };
+  return { version: 1, ...preset, strokeWidth };
 }
 
 // --- Stroke composition (Section 14.2's shared grid + shared stroke vocabulary) ---
@@ -287,12 +285,18 @@ function buildConnectedStrokes(
     // overlapping same-point dots and zero lines/curves/hooks. Excluding
     // "dot" from the pool only for i===0 keeps every family's other members
     // available (no manner pool is dot-only) while guaranteeing the chain
-    // always draws a real, moving skeleton stroke; "dot" stays fully
-    // available as a decorative addition at i>0, once real movement already
-    // happened.
-    const skeletonKinds = i === 0 ? kinds.filter((kind) => kind !== "dot") : kinds;
-    const kind = pickStrokeKind(skeletonKinds.length > 0 ? skeletonKinds : kinds, geometry, rng);
+    // always draws a real, moving skeleton stroke.
+    //
+    // Restricted to the chain's LAST position otherwise (not "any i>0"): a
+    // dot is the one stroke kind render.ts's glyphToSvgPath can never merge
+    // into the surrounding subpath (it's a closed loop, always its own SVG
+    // "M"), so allowing it at every interior position too could stack up
+    // several extra subpaths in a single chain — at most one per chain now,
+    // same "one decorative addition" budget as the mark appended after the
+    // chain.
     const isFinal = i === count - 1;
+    const skeletonKinds = i === 0 || !isFinal ? kinds.filter((kind) => kind !== "dot") : kinds;
+    const kind = pickStrokeKind(skeletonKinds.length > 0 ? skeletonKinds : kinds, geometry, rng);
     const closing = isFinal && i > 0 && grounded && rng.chance(CLOSURE_CHANCE);
 
     // A dot has one coordinate, not a span — it decorates the pen's current

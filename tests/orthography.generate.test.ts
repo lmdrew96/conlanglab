@@ -4,6 +4,7 @@ import { ALL_TARGETS, DEFAULT_PARAMS } from "../convex/phonology/types";
 import { generateLexicon } from "../convex/lexicon/generate";
 import { DEFAULT_LEXICON_PARAMS } from "../convex/lexicon/types";
 import { generateOrthography } from "../convex/orthography/generate";
+import { glyphToSvgPath } from "../convex/orthography/render";
 import { ANCESTOR_SCRIPT_FAMILIES, AESTHETICS, DEFAULT_ORTHOGRAPHY_PARAMS, SCRIPT_CATEGORIES } from "../convex/orthography/types";
 import type { PhonologyData, ConsonantPhoneme } from "../convex/phonology/types";
 import type { AncestorScriptFamily } from "../convex/orthography/types";
@@ -249,11 +250,20 @@ describe("generateOrthography keeps every stroke coordinate on-canvas", () => {
 // generator stacked every applicable decorative mark (manner radical +
 // voiced dot + secondary hook + overflow mark, all unconditional/
 // independent) on top of the connected chain, guaranteeing far more
-// fragmentation than nearly every reference font. Fixed by capping decorative
-// marks at 1/glyph (priority: secondary > voiced > overflow) and shrinking
-// buildScriptStyle's strokeCountRange, since each Stroke renders as its own
-// SVG subpath (render.ts's glyphToSvgPath) — chain length, not just marks,
-// drives the measured contour count.
+// fragmentation than nearly every reference font. Originally "fixed" by
+// capping decorative marks at 1/glyph (priority: secondary > voiced >
+// overflow) and shrinking buildScriptStyle's strokeCountRange toward
+// near-constant 1 — but that shrink was compensating for glyphToSvgPath
+// giving every Stroke object its own SVG "M", which conflated "number of
+// Stroke objects" with "number of rendered contours." Now that connected
+// chain segments merge into one subpath (render.ts's glyphToSvgPath), this
+// counts actual rendered "M" subpaths instead of glyph.strokes.length, so
+// strokeCountRange can stay at its full envelope without re-inflating the
+// measured average.
+
+function countRenderedSubpaths(path: string): number {
+  return (path.match(/M/g) ?? []).length;
+}
 
 describe("generateOrthography matches reference-font contour restraint", () => {
   // Deterministic (seeded Rng, no wall-clock/Math.random) — same 100 seeds
@@ -275,12 +285,13 @@ describe("generateOrthography matches reference-font contour restraint", () => {
           mode: "initial",
           now: FIXED_NOW,
         });
-        for (const glyph of data.glyphs) samples.push(glyph.strokes.length);
+        for (const glyph of data.glyphs) samples.push(countRenderedSubpaths(glyphToSvgPath(glyph)));
       }
       const avg = samples.reduce((a, b) => a + b, 0) / samples.length;
-      // Measured the same way as the references: strokes.length per glyph,
-      // averaged. Reference median ~1.4; target band is the patch's own
-      // acceptance criterion (1.3-1.6), not just "connected"/"on-canvas."
+      // Measured the same way as the references: rendered SVG subpath count
+      // per glyph, averaged. Reference median ~1.4; target band is the
+      // patch's own acceptance criterion (1.3-1.6), not just
+      // "connected"/"on-canvas."
       expect(avg, `avg contours/glyph (${aesthetic}) = ${avg.toFixed(3)}, n=${samples.length}`).toBeGreaterThanOrEqual(1.3);
       expect(avg, `avg contours/glyph (${aesthetic}) = ${avg.toFixed(3)}, n=${samples.length}`).toBeLessThanOrEqual(1.6);
     });
