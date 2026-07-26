@@ -161,13 +161,24 @@ function playFricativeNoise(ctx: AudioContext, dest: AudioNode, place: Consonant
 function playVoiceHum(ctx: AudioContext, dest: AudioNode, startAt: number, dur: number): void {
   const osc = ctx.createOscillator();
   osc.type = "triangle"; // sawtooth's dense harmonics were what read as "buzz" in earlier tuning rounds — triangle's fall off much faster
-  osc.frequency.value = 110;
+  // A dead-flat oscillator was itself the remaining "buzz" — every other
+  // voiced source in this engine (the glottal tract model, via
+  // attachCycleNaturalness in pink-trombone-engine.ts) has cycle-to-cycle
+  // jitter/shimmer; this hum had none, so it read as the one perfectly
+  // mechanical tone in an otherwise natural voice. Same small magnitudes as
+  // that jitter/shimmer.
+  osc.frequency.value = 110 * (1 + (Math.random() - 0.5) * 0.012);
   const lp = ctx.createBiquadFilter();
   lp.type = "lowpass";
-  lp.frequency.value = 220;
+  // Was 220 — right at the 2nd harmonic of a 110Hz fundamental, letting
+  // enough of it through to add a buzzy edge instead of a warm hum. 165
+  // sits between the fundamental and that harmonic, damping the harmonic
+  // further without dulling the fundamental itself.
+  lp.frequency.value = 165;
   lp.Q.value = 0.5;
   const env = ctx.createGain();
-  envelope(env, startAt, dur, 0.22);
+  const shimmer = 1 + (Math.random() - 0.5) * 0.05;
+  envelope(env, startAt, dur, 0.22 * shimmer);
   osc.connect(lp);
   lp.connect(env);
   env.connect(dest);
