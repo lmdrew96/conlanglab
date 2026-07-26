@@ -34,6 +34,7 @@ const STAGE_ROUTES: Partial<Record<keyof typeof STAGE_MILESTONE, string>> = {
 export function LanguageDetail({ id }: { id: string }) {
   const { isAuthenticated } = useConvexAuth();
   const language = useQuery(api.languages.get, isAuthenticated ? { id: id as Id<"languages"> } : "skip");
+  const staleness = useQuery(api.languages.getStageStaleness, isAuthenticated ? { id: id as Id<"languages"> } : "skip");
   const rename = useMutation(api.languages.rename);
   const [editingName, setEditingName] = useState(false);
   const [draftName, setDraftName] = useState("");
@@ -117,6 +118,11 @@ export function LanguageDetail({ id }: { id: string }) {
                   {language.lockedStages[key] && (
                     <span className="rounded bg-accent px-1.5 py-0.5 text-xs font-medium text-accent-text">
                       Locked
+                    </span>
+                  )}
+                  {staleness?.[key] && (
+                    <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-xs font-medium text-amber-600">
+                      Stale
                     </span>
                   )}
                 </div>

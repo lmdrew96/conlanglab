@@ -24,6 +24,39 @@ export const get = query({
   },
 });
 
+// Per-stage "is anything in this stage stale" for the library/detail list
+// badge (design doc Section 10.2a). Item-collection stages (lexicon,
+// morphology) are stale if the stage doc itself or any individual item is
+// flagged; single-document stages (phonology, syntax, orthography) just
+// read the stage doc's own staleSince.
+export const getStageStaleness = query({
+  args: { id: v.id("languages") },
+  handler: async (ctx, { id }) => {
+    const userId = await requireUserId(ctx);
+    const language = await ctx.db.get(id);
+    if (!language || language.owner !== userId) return null;
+
+    const [phonologyRow, lexiconRow, lexiconItems, morphologyRow, morphologyItems, syntaxRow, orthographyRow] =
+      await Promise.all([
+        ctx.db.query("phonology").withIndex("by_language", (q) => q.eq("languageId", id)).unique(),
+        ctx.db.query("lexicon").withIndex("by_language", (q) => q.eq("languageId", id)).unique(),
+        ctx.db.query("lexiconItems").withIndex("by_language", (q) => q.eq("languageId", id)).collect(),
+        ctx.db.query("morphology").withIndex("by_language", (q) => q.eq("languageId", id)).unique(),
+        ctx.db.query("morphologyItems").withIndex("by_language", (q) => q.eq("languageId", id)).collect(),
+        ctx.db.query("syntax").withIndex("by_language", (q) => q.eq("languageId", id)).unique(),
+        ctx.db.query("orthography").withIndex("by_language", (q) => q.eq("languageId", id)).unique(),
+      ]);
+
+    return {
+      phonology: phonologyRow?.staleSince != null,
+      lexicon: lexiconRow?.staleSince != null || lexiconItems.some((item) => item.staleSince != null),
+      morphology: morphologyRow?.staleSince != null || morphologyItems.some((item) => item.staleSince != null),
+      syntax: syntaxRow?.staleSince != null,
+      orthography: orthographyRow?.staleSince != null,
+    };
+  },
+});
+
 export const create = mutation({
   args: { name: v.string() },
   handler: async (ctx, { name }) => {
