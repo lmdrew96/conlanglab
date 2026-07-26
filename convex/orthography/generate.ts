@@ -215,6 +215,14 @@ interface GridCursor {
 }
 
 const ORTHOGONAL_MOVE_CHANCE = 0.75;
+const MAX_TURN_ANGLE_DEGREES = 150;
+
+/** Unsigned angle (0-180°) between two direction vectors — 0 = continuing straight ahead, 180 = a complete reversal back over the incoming direction. */
+function turnAngleDegrees(incoming: Point, outgoing: Point): number {
+  const dot = incoming.x * outgoing.x + incoming.y * outgoing.y;
+  const cross = incoming.x * outgoing.y - incoming.y * outgoing.x;
+  return (Math.atan2(Math.abs(cross), dot) * 180) / Math.PI;
+}
 
 /**
  * Enumerates every other grid point, split into "orthogonal" (shares a row
@@ -226,18 +234,57 @@ const ORTHOGONAL_MOVE_CHANCE = 0.75;
  * random picking constantly draws corner-to-corner diagonals that cross
  * through the glyph — the reason grid-snapped strokes still read as
  * chaotic scribbles instead of clean blocky letters.
+ *
+ * `incomingDirection` (the direction the chain just traveled to reach
+ * `exclude`, or null on the chain's first pick) rules out candidates that
+ * would double back over that direction — bending at a corner (~90°) reads
+ * as a letter; reversing hard back over the segment that just drew it
+ * (~180°) reads as a scribble, and nothing here previously distinguished
+ * the two. A tight corner can in principle filter out every candidate, so
+ * this falls back to the single least-bad (smallest turn angle) point
+ * rather than leaving the pool empty.
+ *
+ * `requireRow` restricts the whole candidate pool to one row — used when the
+ * chain's final stroke must land on the baseline row (buildConnectedStrokes'
+ * grounding guarantee). That requirement used to be applied by overriding
+ * the row on an already-picked candidate *after* this function chose it,
+ * which could silently undo the turn-angle filtering above (a turn-safe
+ * candidate in one row is not necessarily turn-safe once relocated to
+ * another). A single row is only 3 points, so it's meaningfully more likely
+ * than the full grid to have none of them turn-safe; when that happens,
+ * grounding loses to the no-reversal rule — this falls through to a normal,
+ * full-grid turn-safe pick rather than forcing an over-threshold candidate
+ * just to land on the baseline. Grounding is a strong bias (a multi-segment
+ * random walk across 4 rows reaches the baseline naturally in the large
+ * majority of chains anyway), not a guarantee worth scribbling for.
  */
-function pickGridPoint(grid: Point[][], rng: Rng, exclude: GridCursor): GridCursor {
-  const orthogonal: GridCursor[] = [];
-  const diagonal: GridCursor[] = [];
-  for (let row = 0; row < GRID_ROWS; row++) {
-    for (let col = 0; col < GRID_COLS; col++) {
-      if (row === exclude.row && col === exclude.col) continue;
-      (row === exclude.row || col === exclude.col ? orthogonal : diagonal).push({ row, col, point: grid[row][col] });
+function pickGridPoint(grid: Point[][], rng: Rng, exclude: GridCursor, incomingDirection: Point | null, requireRow: number | null = null): GridCursor {
+  const candidatesInRows = (rows: number[]) => {
+    const all: Array<{ cursor: GridCursor; turn: number }> = [];
+    for (const row of rows) {
+      for (let col = 0; col < GRID_COLS; col++) {
+        if (row === exclude.row && col === exclude.col) continue;
+        const point = grid[row][col];
+        const turn = incomingDirection ? turnAngleDegrees(incomingDirection, { x: point.x - exclude.point.x, y: point.y - exclude.point.y }) : 0;
+        all.push({ cursor: { row, col, point }, turn });
+      }
     }
+    return all;
+  };
+  const finish = (all: Array<{ cursor: GridCursor; turn: number }>) => {
+    const notReversing = incomingDirection ? all.filter((c) => c.turn <= MAX_TURN_ANGLE_DEGREES) : all;
+    const candidates = (notReversing.length > 0 ? notReversing : [all.reduce((best, c) => (c.turn < best.turn ? c : best))]).map((c) => c.cursor);
+    const orthogonal = candidates.filter((c) => c.row === exclude.row || c.col === exclude.col);
+    const diagonal = candidates.filter((c) => c.row !== exclude.row && c.col !== exclude.col);
+    const pool = orthogonal.length > 0 && rng.chance(ORTHOGONAL_MOVE_CHANCE) ? orthogonal : diagonal;
+    return rng.pick(pool.length > 0 ? pool : orthogonal.length > 0 ? orthogonal : candidates);
+  };
+
+  if (requireRow !== null) {
+    const restricted = candidatesInRows([requireRow]);
+    if (!incomingDirection || restricted.some((c) => c.turn <= MAX_TURN_ANGLE_DEGREES)) return finish(restricted);
   }
-  const pool = orthogonal.length > 0 && rng.chance(ORTHOGONAL_MOVE_CHANCE) ? orthogonal : diagonal;
-  return rng.pick(pool.length > 0 ? pool : orthogonal);
+  return finish(candidatesInRows(Array.from({ length: GRID_ROWS }, (_, r) => r)));
 }
 
 const CLOSURE_CHANCE = 0.3;
@@ -274,6 +321,7 @@ function buildConnectedStrokes(
   const start: GridCursor = { row: 0, col: startCol, point: grid[0][startCol] };
 
   let cursor = start;
+  let prevPoint: Point | null = null;
   let grounded = false;
   const strokes: Stroke[] = [];
 
@@ -297,15 +345,34 @@ function buildConnectedStrokes(
     const isFinal = i === count - 1;
     const skeletonKinds = i === 0 || !isFinal ? kinds.filter((kind) => kind !== "dot") : kinds;
     const kind = pickStrokeKind(skeletonKinds.length > 0 ? skeletonKinds : kinds, geometry, rng);
-    const closing = isFinal && i > 0 && grounded && rng.chance(CLOSURE_CHANCE);
+    const wantsToClose = isFinal && i > 0 && grounded && rng.chance(CLOSURE_CHANCE);
 
     // A dot has one coordinate, not a span — it decorates the pen's current
     // position rather than moving to a freshly picked point. Advancing it to
     // an unrelated grid point (like line/curve/hook do) would silently
     // "teleport" it with nothing drawn in between, reproducing the exact
     // disconnected-mark bug this function exists to prevent.
-    let target = closing ? start : kind === "dot" ? cursor : pickGridPoint(grid, rng, cursor);
-    if (isFinal && !grounded && kind !== "dot") target = { row: GRID_ROWS - 1, col: target.col, point: grid[GRID_ROWS - 1][target.col] };
+    const incomingDirection = prevPoint ? { x: cursor.point.x - prevPoint.x, y: cursor.point.y - prevPoint.y } : null;
+    // Closing bypasses pickGridPoint's own turn filter (it targets `start`
+    // directly, not a filtered candidate), so a chain that closes after only
+    // one prior segment would otherwise always retrace that segment exactly
+    // backwards — a degenerate "line drawn twice," the same scribble pattern
+    // this whole mechanism exists to rule out. Same threshold, checked here
+    // instead: if closing would reverse too sharply, fall through to a normal
+    // (turn-safe) pick rather than closing.
+    //
+    // A random walk can also land back on `start` on its own before the
+    // final stroke — closing onto it then would be a ZERO-length move.
+    // atan2(0,0) reads as "0° turn" (harmlessly passes the check above) but
+    // length gets floored to 4 for line/curve/hook alike, fabricating a
+    // phantom stroke pointing in an arbitrary default direction out of
+    // nothing — which then reads as a real reversal against whatever came
+    // before. Closing only makes sense when there's real distance to close.
+    const closeVector = { x: start.point.x - cursor.point.x, y: start.point.y - cursor.point.y };
+    const closingHasDistance = closeVector.x !== 0 || closeVector.y !== 0;
+    const closing = wantsToClose && closingHasDistance && (!incomingDirection || turnAngleDegrees(incomingDirection, closeVector) <= MAX_TURN_ANGLE_DEGREES);
+    const mustGround = isFinal && !grounded && kind !== "dot";
+    let target = closing ? start : kind === "dot" ? cursor : pickGridPoint(grid, rng, cursor, incomingDirection, mustGround ? GRID_ROWS - 1 : null);
     if (target.row === GRID_ROWS - 1) grounded = true;
 
     const from = cursor.point;
@@ -339,6 +406,10 @@ function buildConnectedStrokes(
       }
     }
     strokes.push(stroke);
+    // A "dot" doesn't move the cursor (from === to), so it carries no real
+    // direction of its own — leave prevPoint alone rather than collapsing
+    // the incoming direction to a zero vector for whatever comes next.
+    if (kind !== "dot") prevPoint = from;
     cursor = target;
   }
   return { strokes, start: start.point, end: cursor.point };

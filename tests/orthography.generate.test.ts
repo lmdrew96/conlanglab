@@ -364,3 +364,114 @@ describe("generateOrthography caps decorative marks at one per glyph", () => {
     }
   });
 });
+
+// Regression coverage for the "scribble" bug: pickGridPoint had no concept
+// of the chain's current direction of travel, so a multi-segment chain
+// could legally reverse hard back over a segment that just drew it. Masked
+// while strokeCountRange was pinned near-1 by the mark-restraint patch (a
+// 1-segment chain can't reverse against itself); visible again now that
+// chains are back to their full 2-4/2-5 envelope.
+
+/** A stroke's own direction vector (its end minus its start) — null for "dot", which has no direction of its own. Same computed-hook-end formula as strokePoints/render.ts. */
+function strokeDirection(stroke: Stroke): Point | null {
+  switch (stroke.kind) {
+    case "line":
+    case "curve":
+      return { x: stroke.to.x - stroke.from.x, y: stroke.to.y - stroke.from.y };
+    case "dot":
+      return null;
+    case "hook": {
+      const rad = (stroke.angle * Math.PI) / 180;
+      return { x: Math.cos(rad) * stroke.length, y: Math.sin(rad) * stroke.length };
+    }
+  }
+}
+
+/** Same formula as generate.ts's turnAngleDegrees — 0 = continuing straight ahead, 180 = a complete reversal. Duplicated locally rather than importing an internal, matching this file's existing convention (strokePoints/connectingPoint) of reimplementing small geometry helpers for black-box testing through the public API. */
+function turnAngleDegrees(incoming: Point, outgoing: Point): number {
+  const dot = incoming.x * outgoing.x + incoming.y * outgoing.y;
+  const cross = incoming.x * outgoing.y - incoming.y * outgoing.x;
+  return (Math.atan2(Math.abs(cross), dot) * 180) / Math.PI;
+}
+
+const MAX_TURN_ANGLE_DEGREES = 150;
+// Float round-trip through atan2/cos/sin (hook's reconstructed direction)
+// can land a hair over the exact threshold without representing a real
+// additional reversal — same spirit as this file's own EPSILON tolerance.
+const ANGLE_EPSILON = 0.5;
+
+describe("generateOrthography chain segments never reverse direction", () => {
+  const ALL_MANNERS: ConsonantPhoneme["features"]["manner"][] = [
+    "stop",
+    "nasal",
+    "fricative",
+    "affricate",
+    "approximant",
+    "lateralApproximant",
+    "trill",
+    "tap",
+    "lateralFricative",
+    "click",
+    "ejective",
+    "implosive",
+  ];
+  const PLACES: ConsonantPhoneme["features"]["place"][] = ["bilabial", "alveolar", "velar", "glottal"];
+
+  function noMarkConsonant(manner: ConsonantPhoneme["features"]["manner"], place: ConsonantPhoneme["features"]["place"]): ConsonantPhoneme {
+    // Unvoiced, no secondary articulation — guarantees buildConsonantStrokes
+    // never appends a decorative mark, so every stroke in the resulting
+    // glyph is pure connected-chain output (the only thing this check cares
+    // about; an appended mark is a deliberately disconnected jump, not a
+    // "reversal" bug).
+    return { id: `${place}-${manner}`, ipa: "x", features: { place, manner, voiced: false }, tier: "core", prerequisites: [], locked: false };
+  }
+
+  const SEEDS = Array.from({ length: 100 }, (_, i) => i + 1);
+
+  for (const aesthetic of AESTHETICS) {
+    it(`no chain segment reverses past ${MAX_TURN_ANGLE_DEGREES}° (${aesthetic})`, () => {
+      const consonants = ALL_MANNERS.flatMap((manner) => PLACES.map((place) => noMarkConsonant(manner, place)));
+      let checkedPairs = 0;
+
+      for (const seedBase of SEEDS) {
+        const basePhonology = testPhonology(seedBase);
+        // overflowStrategy stays the default "extendedInventory" (never
+        // marks overflow) and vowels are forced unrounded, so — like the
+        // consonants above — no glyph in this sweep ever gets an appended
+        // mark; every stroke is chain output.
+        const phonology: PhonologyData = {
+          ...basePhonology,
+          consonants,
+          vowels: basePhonology.vowels.map((v) => ({ ...v, features: { ...v.features, rounded: false } })),
+        };
+        const data = generateOrthography({
+          seed: { base: seedBase, variation: 0 },
+          params: { ...DEFAULT_ORTHOGRAPHY_PARAMS, scriptCategory: "alphabetic", aesthetic },
+          phonology,
+          lexiconItems: [],
+          previous: null,
+          mode: "initial",
+          now: FIXED_NOW,
+        });
+
+        for (const glyph of data.glyphs) {
+          let incoming: Point | null = null;
+          for (const stroke of glyph.strokes) {
+            const outgoing = strokeDirection(stroke);
+            if (incoming && outgoing) {
+              const turn = turnAngleDegrees(incoming, outgoing);
+              checkedPairs++;
+              expect(turn, `glyph "${glyph.id}" (${aesthetic}, seed ${seedBase}) reversed ${turn.toFixed(1)}°`).toBeLessThanOrEqual(
+                MAX_TURN_ANGLE_DEGREES + ANGLE_EPSILON,
+              );
+            }
+            if (outgoing) incoming = outgoing;
+          }
+        }
+      }
+      // Sanity check on the test itself — if this is 0, the fixture stopped
+      // producing multi-segment chains and the assertions above are vacuous.
+      expect(checkedPairs).toBeGreaterThan(0);
+    });
+  }
+});

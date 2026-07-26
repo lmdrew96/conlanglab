@@ -59,12 +59,17 @@ export const AESTHETIC_STYLE_PRESETS: Record<Aesthetic, Omit<ScriptStyle, "versi
  * three "free" kinds) for its own distinct identity. Also decouples
  * lateralApproximant from nasal ({hook,dot}): they now share no stroke kind
  * at all.
+ *
+ * fricative/affricate had the exact same issue ({curve,line} vs {line,curve}
+ * — same two members). Same fix pattern as trill: affricate gets the richer
+ * non-dot 3-member pool instead of a differently-shaped 2-member one, so it's
+ * a distinct set from fricative without adding new dot-frequency.
  */
 export const STROKE_FAMILY_BY_MANNER: Record<ConsonantManner, Stroke["kind"][]> = {
   stop: ["line", "hook"],
   nasal: ["hook", "dot"],
   fricative: ["curve", "line"],
-  affricate: ["line", "curve"],
+  affricate: ["line", "curve", "hook"],
   approximant: ["curve", "hook", "line"],
   lateralApproximant: ["line", "curve"],
   trill: ["line", "curve", "hook"],
