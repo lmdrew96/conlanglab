@@ -346,6 +346,33 @@ function anticipatedShape(unit: ConsonantPhoneme | VowelPhoneme): number[] {
   }
 }
 
+/**
+ * The base a consonant's OWN closure (stop/ejective/implosive/nasal/
+ * affricate/click) is built on top of — `closeInto` only when `next` is a
+ * vowel, REST_SHAPE otherwise.
+ *
+ * Anticipatory coarticulation toward a following VOWEL during a closure is
+ * real: the tongue is free to start moving toward the vowel while only the
+ * closure point itself has to stay sealed, so building the hold on top of
+ * the vowel's own shape is physically motivated. But when `next` is ANOTHER
+ * CONSONANT, `anticipatedShape(next)` is already a narrow constriction at
+ * ITS OWN place (see anticipatedShape) — using that as the closure's base
+ * pre-narrows the tract at a second point for the entire hold, splitting
+ * what should be one continuous resonant cavity into two. A back place
+ * (velar/uvular/pharyngeal) gets its whole acoustic identity from a large,
+ * undivided front cavity between the closure and the lips; pinching that
+ * cavity at the next consonant's place makes it resonate like a much
+ * smaller, fronter cavity instead — reported as "/g/ sounds like /b/"
+ * specifically in coda clusters like /gɾ/ (bilabial's own front cavity is
+ * already tiny, so the same pre-narrowing barely changes anything there,
+ * which is why /bɾ/ sounded normal). The next consonant's place still gets
+ * anticipated — at the RELEASE step, which already targets `closeInto`
+ * directly — just not baked into the hold itself.
+ */
+function closureBase(closeInto: number[], next: ConsonantPhoneme | VowelPhoneme | undefined): number[] {
+  return next && isVowelUnit(next) ? closeInto : REST_SHAPE;
+}
+
 // 115Hz sits dead-center of the adult-male F0 range (~85-180Hz); adult female
 // averages ~200-220Hz. We can't shorten the modeled vocal tract without
 // invalidating the hand-measured vowel formant table above, so pitch (+ a
@@ -500,7 +527,7 @@ function scheduleStop(cursor: Cursor, place: ConsonantPlace, voiced: boolean, cl
     e.Glottis.isTouched = voiced;
     if (voiced) fadeGlottisIn(e);
     else fadeGlottisOut(e);
-    closeFast(e, constrict(closeInto, index, 3, 0));
+    closeFast(e, constrict(closureBase(closeInto, next), index, 3, 0));
   });
   if (!voiced) scheduleMuteZero(cursor);
   cursor.time += closure;
@@ -558,7 +585,7 @@ function scheduleEjective(cursor: Cursor, place: ConsonantPlace, closeInto: numb
   const index = coarticulatedIndex(place, next);
   at(cursor, (e) => {
     e.Glottis.isTouched = false;
-    closeFast(e, constrict(closeInto, index, 3, 0));
+    closeFast(e, constrict(closureBase(closeInto, next), index, 3, 0));
   });
   cursor.time += closure;
   // Ejectives build up oral pressure behind a glottalic closure rather than
@@ -591,7 +618,7 @@ function scheduleImplosive(cursor: Cursor, place: ConsonantPlace, closeInto: num
     e.Glottis.isTouched = true;
     fadeGlottisIn(e);
     e.Glottis.UIFrequency = 80; // low, resonant pre-voicing — the closest approximation available to true ingressive voicing
-    closeFast(e, constrict(closeInto, index, 3, 0));
+    closeFast(e, constrict(closureBase(closeInto, next), index, 3, 0));
   });
   cursor.time += closure;
   const pitch = cursor.lastPitch;
@@ -615,7 +642,7 @@ function scheduleNasal(cursor: Cursor, place: ConsonantPlace, closeInto: number[
     e.Glottis.UIFrequency = pitch;
     e.Glottis.UITenseness = NEUTRAL_TENSENESS;
     e.Tract.velumTarget = 0.4;
-    closeFast(e, constrict(closeInto, index, 3, 0));
+    closeFast(e, constrict(closureBase(closeInto, next), index, 3, 0));
   });
   cursor.time += 0.05;
   at(cursor, (e) => {
@@ -700,7 +727,7 @@ function scheduleAffricate(cursor: Cursor, place: ConsonantPlace, voiced: boolea
     e.Glottis.isTouched = voiced;
     if (voiced) fadeGlottisIn(e);
     else fadeGlottisOut(e);
-    closeFast(e, constrict(closeInto, index, 3, 0));
+    closeFast(e, constrict(closureBase(closeInto, next), index, 3, 0));
   });
   if (!voiced) scheduleMuteZero(cursor);
   cursor.time += closure;
@@ -731,7 +758,7 @@ function scheduleClick(cursor: Cursor, place: ConsonantPlace, closeInto: number[
   at(cursor, (e) => {
     e.Glottis.isTouched = false;
     fadeGlottisOut(e);
-    setShape(e, constrict(closeInto, index, 3, 0));
+    setShape(e, constrict(closureBase(closeInto, next), index, 3, 0));
   });
   scheduleMuteZero(cursor);
   cursor.noiseEvents.push({ atOffset: cursor.time, dur, place, voiced: false, kind: "click" });
