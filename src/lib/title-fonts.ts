@@ -15,8 +15,10 @@ const superMarioDs = localFont({ src: "../../fonts/SuperMarioDs.ttf" });
 const yoshinese = localFont({ src: "../../fonts/Yoshinese.ttf" });
 const aurekBeshHand = localFont({ src: "../../fonts/new-fonts/AurekBeshHand-pROK.ttf" });
 const britannian = localFont({ src: "../../fonts/new-fonts/Britannian-J4oB.ttf" });
-const etruscan = localFont({ src: "../../fonts/new-fonts/Etruscan-K76A.ttf" });
-const korohanza = localFont({ src: "../../fonts/new-fonts/Korohanza-nRlM.ttf" });
+// Etruscan-K76A.ttf and Korohanza-nRlM.ttf are excluded: both ship only a
+// legacy Mac Roman (platform 1) cmap with a non-standard glyph order, no
+// Unicode cmap at all, so every character in the rotary title falls back to
+// the next font in the stack instead of rendering in these fonts.
 const luciusCipher = localFont({ src: "../../fonts/new-fonts/LuciusCipher-3zYvy.ttf" });
 const oneVerse = localFont({ src: "../../fonts/new-fonts/OneVerseRegular-PKM4x.ttf" });
 const ptgulShikieika = localFont({ src: "../../fonts/new-fonts/PtgulShikieika-d9Anl.ttf" });
@@ -41,8 +43,6 @@ export const TITLE_FONTS = [
   yoshinese,
   aurekBeshHand,
   britannian,
-  etruscan,
-  korohanza,
   luciusCipher,
   oneVerse,
   ptgulShikieika,
