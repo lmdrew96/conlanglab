@@ -60,32 +60,6 @@ export const STROKE_FAMILY_BY_MANNER: Record<ConsonantManner, Stroke["kind"][]> 
   implosive: ["curve", "dot"],
 };
 
-/**
- * Manner → a fixed small tick angle, appended to every consonant glyph as a
- * deterministic (non-random) "manner radical" — Hangul-style featural
- * composition: same manner always produces the exact same tiny mark,
- * regardless of which stroke kind shapeBias happened to pick for that
- * glyph's main strokes. STROKE_FAMILY_BY_MANNER's shared pool already makes
- * same-manner glyphs *likely* similar; this radical makes them *guaranteed*
- * visibly related, satisfying the "phonemes sharing a feature are visibly
- * related" contract unambiguously rather than statistically. 12 manners
- * spaced 30° apart around the circle so no two are visually adjacent.
- */
-export const MANNER_RADICAL_ANGLE: Record<ConsonantManner, number> = {
-  stop: 0,
-  nasal: 30,
-  fricative: 60,
-  affricate: 90,
-  approximant: 120,
-  lateralApproximant: 150,
-  trill: 180,
-  tap: 210,
-  lateralFricative: 240,
-  click: 270,
-  ejective: 300,
-  implosive: 330,
-};
-
 /** Place of articulation → horizontal grid position (0..1), ordered front-to-back along the IPA chart's own continuum so adjacent places produce visually adjacent glyphs. */
 export const ORIENTATION_BY_PLACE: Record<ConsonantPlace, number> = {
   bilabial: 0,

@@ -13,7 +13,6 @@ import {
   ALL_STROKE_KINDS,
   ANCESTOR_SCRIPT_BIAS,
   BOUNDARY_TREATMENT_TABLE,
-  MANNER_RADICAL_ANGLE,
   ORIENTATION_BY_PLACE,
   SECONDARY_MARK_ANGLE,
   STROKE_FAMILY_BY_MANNER,
@@ -73,13 +72,22 @@ const STYLE_SALT = 0xc0ffee;
  * stays the thinner/sparser archetype and realLike the heavier/denser one
  * on average, but two scripts of the same aesthetic can still land anywhere
  * in that envelope — one bold and minimal, another thin and elaborate.
+ *
+ * `strokeCountRange`'s min is now fixed at 1 (every glyph's chain can be a
+ * single stroke) with only the max varying per script — measured against 15
+ * reference constructed-script fonts, a real letterform averages ~1.4
+ * contours/glyph (fontTools contour count across A-Z), and this chain count
+ * is the dominant term in that total (each Stroke is rendered as its own SVG
+ * subpath — see render.ts's glyphToSvgPath — so a wider count range directly
+ * inflates the measured contour average, independent of decorative marks).
+ * The old [1-2, 3-5]/[2-3, 4-6] ranges averaged 3-4 chain strokes alone,
+ * several times denser than any reference font but the two outliers.
  */
 export function buildScriptStyle(aesthetic: Aesthetic, seedBase: number): ScriptStyle {
   const preset = AESTHETIC_STYLE_PRESETS[aesthetic];
   const rng = new Rng(deriveSeed(seedBase, STYLE_SALT));
   const strokeWidth = aesthetic === "invented" ? rng.int(3, 6) : rng.int(2, 5);
-  const strokeCountRange: [number, number] =
-    aesthetic === "invented" ? [rng.int(1, 2), rng.int(3, 5)] : [rng.int(2, 3), rng.int(4, 6)];
+  const strokeCountRange: [number, number] = [1, rng.chance(aesthetic === "invented" ? 0.15 : 0.25) ? 2 : 1];
   return { version: 1, ...preset, strokeWidth, strokeCountRange };
 }
 
@@ -89,6 +97,10 @@ function gridX(bias: number, style: ScriptStyle, jitter: number): number {
   const margin = style.viewBoxSize * 0.15;
   const usable = style.viewBoxSize - margin * 2;
   return margin + bias * usable + jitter;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
 }
 
 const GEOMETRY_SALT = 0xbeef;
@@ -183,8 +195,16 @@ const FOOTPRINT_HALF_WIDTH_FRACTION = 0.22;
  */
 function buildLocalGrid(xBias: number, yBand: [number, number], style: ScriptStyle, geometry: GeometryProfile): Point[][] {
   const [yTop, yBottom] = yBand;
-  const centerX = gridX(xBias, style, geometry.slant * geometry.jitterSpread);
   const half = style.viewBoxSize * FOOTPRINT_HALF_WIDTH_FRACTION;
+  // Edge places (bilabial/glottal xBias 0/1) already sit near the margin
+  // boundary before jitter; slant*jitterSpread (up to ~19px, more for
+  // ancestorScript="arabic") can push centerX far enough that the grid's own
+  // footprint (±half) lands partially or fully outside the viewBox — a glyph
+  // that generates without error but renders invisible. Clamping here keeps
+  // the whole 3-column footprint on-canvas without squashing its spacing,
+  // rather than clamping each derived stroke coordinate independently.
+  const rawCenterX = gridX(xBias, style, geometry.slant * geometry.jitterSpread);
+  const centerX = clamp(rawCenterX, half, style.viewBoxSize - half);
   const cols = [centerX - half, centerX, centerX + half];
   const rows = Array.from({ length: GRID_ROWS }, (_, i) => yTop + ((yBottom - yTop) * i) / (GRID_ROWS - 1));
   return rows.map((y) => cols.map((x) => ({ x, y })));
@@ -238,7 +258,7 @@ interface ConnectedStrokes {
   strokes: Stroke[];
   /** The chain's own first point — literally `strokes[0]`'s from/anchor/center. Callers anchor near-top decorative marks here so they share a real coordinate with the chain instead of an independently computed one. */
   start: Point;
-  /** The chain's own last point — literally the final stroke's to/center. Callers anchor near-bottom decorative marks (e.g. the manner radical) here. */
+  /** The chain's own last point — literally the final stroke's to/center. Callers anchor near-bottom decorative marks here, and buildSyllableStrokes bridges from this point to the following vowel's own `start`. */
   end: Point;
 }
 
@@ -260,7 +280,18 @@ function buildConnectedStrokes(
   const strokes: Stroke[] = [];
 
   for (let i = 0; i < count; i++) {
-    const kind = pickStrokeKind(kinds, geometry, rng);
+    // The first stroke establishes the chain's own movement away from
+    // `start` — a "dot" kind doesn't move the cursor (see below), so picking
+    // it here would leave start/end at the identical unmoved point. For a
+    // count===1 chain that's the glyph's ENTIRE skeleton: nothing but
+    // overlapping same-point dots and zero lines/curves/hooks. Excluding
+    // "dot" from the pool only for i===0 keeps every family's other members
+    // available (no manner pool is dot-only) while guaranteeing the chain
+    // always draws a real, moving skeleton stroke; "dot" stays fully
+    // available as a decorative addition at i>0, once real movement already
+    // happened.
+    const skeletonKinds = i === 0 ? kinds.filter((kind) => kind !== "dot") : kinds;
+    const kind = pickStrokeKind(skeletonKinds.length > 0 ? skeletonKinds : kinds, geometry, rng);
     const isFinal = i === count - 1;
     const closing = isFinal && i > 0 && grounded && rng.chance(CLOSURE_CHANCE);
 
@@ -314,22 +345,41 @@ function buildOverflowMark(anchor: Point, style: ScriptStyle): Stroke {
   return { kind: "dot", center: anchor, radius: style.strokeWidth * 0.6 };
 }
 
+function clampPoint(point: Point, size: number): Point {
+  return { x: clamp(point.x, 0, size), y: clamp(point.y, 0, size) };
+}
+
 /**
- * A fixed, non-random tick keyed only by manner (MANNER_RADICAL_ANGLE) —
- * every consonant sharing a manner gets the exact same tiny mark,
- * regardless of which stroke kind shapeBias picked for its main strokes.
- * Starts exactly at the connected chain's own `end` point (its last
- * stroke's literal to/center coordinate) instead of an independently
- * computed gridX/baselineY coordinate, then extends outward at its own
- * angle — reads as an attached flourish off the letterform, not a second,
- * unrelated floating stroke (the actual mechanism this patch fixes; the
- * chain itself was already correctly connected before this change, but
- * every consonant unconditionally got this radical appended disconnected).
+ * Defensive net for Bug B's off-canvas failure mode: buildLocalGrid's own
+ * centerX clamp keeps the shared grid on-canvas, but a mark anchored off a
+ * grid point with its own independent offset (the voiced dot's +8/-6, the
+ * manner radical's outward extension, a curve's bulge) can still stray past
+ * the viewBox edge on its own. Clamps every coordinate field a Stroke
+ * actually stores — a hook's far end isn't a stored field (only its anchor
+ * is), so there's nothing further to clamp there.
  */
-function buildMannerRadical(manner: ConsonantPhoneme["features"]["manner"], anchor: Point, style: ScriptStyle): Stroke {
-  const angleRad = (MANNER_RADICAL_ANGLE[manner] * Math.PI) / 180;
-  const length = style.viewBoxSize * 0.08;
-  return { kind: "line", from: anchor, to: { x: anchor.x + Math.cos(angleRad) * length, y: anchor.y + Math.sin(angleRad) * length } };
+function clampStroke(stroke: Stroke, size: number): Stroke {
+  switch (stroke.kind) {
+    case "line":
+      return { ...stroke, from: clampPoint(stroke.from, size), to: clampPoint(stroke.to, size) };
+    case "curve":
+      return { ...stroke, from: clampPoint(stroke.from, size), control: clampPoint(stroke.control, size), to: clampPoint(stroke.to, size) };
+    case "dot":
+      return { ...stroke, center: clampPoint(stroke.center, size) };
+    case "hook":
+      return { ...stroke, anchor: clampPoint(stroke.anchor, size) };
+  }
+}
+
+function clampStrokes(strokes: Stroke[], size: number): Stroke[] {
+  return strokes.map((stroke) => clampStroke(stroke, size));
+}
+
+/** `chainStart`/`chainEnd` are the connected chain's own anchors, unaffected by whichever mark (if any) got appended after it — buildSyllableStrokes uses these to bridge a consonant+vowel pair into one visually connected syllable glyph, since a mark's own anchor isn't a reliable stand-in (a hook's far end, e.g., isn't a stored coordinate). */
+interface ConsonantStrokeSet {
+  strokes: Stroke[];
+  chainStart: Point;
+  chainEnd: Point;
 }
 
 function buildConsonantStrokes(
@@ -338,22 +388,48 @@ function buildConsonantStrokes(
   geometry: GeometryProfile,
   rng: Rng,
   markOverflow = false,
-): Stroke[] {
+): ConsonantStrokeSet {
   const family = STROKE_FAMILY_BY_MANNER[phoneme.features.manner];
   const xBias = ORIENTATION_BY_PLACE[phoneme.features.place];
   const yBand: [number, number] = [style.xHeightY, style.baselineY];
   const [minStrokes, maxStrokes] = style.strokeCountRange;
   const { strokes, start, end } = buildConnectedStrokes(family, rng.int(minStrokes, maxStrokes), xBias, yBand, style, geometry, rng);
-  strokes.push(buildMannerRadical(phoneme.features.manner, end, style));
-  if (phoneme.features.voiced) {
-    strokes.push({ kind: "dot", center: { x: start.x + 8, y: start.y - 6 }, radius: style.strokeWidth });
-  }
+  // Reference constructed-script fonts average ~1.4 contours/glyph — most
+  // letters are ONE confident stroke, with an accent the exception rather
+  // than the rule. Stacking every applicable mark (manner radical + voiced
+  // dot + secondary hook + overflow mark, unconditionally/independently)
+  // guaranteed 4 separate touching-but-distinct subpaths on a voiced-
+  // secondary consonant, busier than every reference font but the two
+  // outliers. At most one mark per glyph now, picked by priority: secondary
+  // articulation and voicing are the phonologically salient features
+  // (secondary changes the whole consonant's articulation; voicing is a core
+  // contrast), so they win; overflow — the "added-on tier" signal — is next.
+  // The old unconditional manner radical is dropped entirely rather than
+  // demoted to a fallback: manner is already statistically encoded via
+  // STROKE_FAMILY_BY_MANNER's shape-family selection, and a guaranteed mark
+  // on every "plain" consonant (no secondary/voicing/overflow) would keep
+  // every glyph decorated — the reference fonts' dominant pattern is a bare
+  // skeleton with NO mark at all for the common case.
   if (phoneme.features.secondary) {
     const angle = SECONDARY_MARK_ANGLE[phoneme.features.secondary];
     strokes.push({ kind: "hook", anchor: start, angle, length: 8, curvature: 10 });
+  } else if (phoneme.features.voiced) {
+    // Anchored exactly at `start` (not an independent offset point): with
+    // the manner radical gone, voicing can now be a glyph's ONLY extra mark,
+    // so — like every other mark here — it must itself land on a literal
+    // chain coordinate to satisfy the connectivity contract, rather than
+    // relying on a guaranteed second mark to supply that connection.
+    strokes.push({ kind: "dot", center: start, radius: style.strokeWidth });
+  } else if (markOverflow) {
+    strokes.push(buildOverflowMark(start, style));
   }
-  if (markOverflow) strokes.push(buildOverflowMark(start, style));
-  return strokes;
+  return { strokes: clampStrokes(strokes, style.viewBoxSize), chainStart: clampPoint(start, style.viewBoxSize), chainEnd: clampPoint(end, style.viewBoxSize) };
+}
+
+interface VowelStrokeSet {
+  strokes: Stroke[];
+  chainStart: Point;
+  chainEnd: Point;
 }
 
 function buildVowelStrokes(
@@ -362,7 +438,7 @@ function buildVowelStrokes(
   geometry: GeometryProfile,
   rng: Rng,
   markOverflow = false,
-): Stroke[] {
+): VowelStrokeSet {
   const xBias = VOWEL_BACKNESS_X[phoneme.features.backness];
   const yBand = heightBand(phoneme.features.height, style.xHeightY, style.baselineY);
   const count = Math.max(1, style.strokeCountRange[0] - 1);
@@ -371,11 +447,15 @@ function buildVowelStrokes(
   // unconditional decorative mark (no manner radical) to guarantee the
   // connectivity contract on its own, so when this is the only extra stroke
   // it must itself land on a literal chain coordinate.
+  // Same one-mark budget as buildConsonantStrokes: rounding is a core vowel
+  // feature (the vowel equivalent of voicing), so it wins over the
+  // added-on-tier overflow signal.
   if (phoneme.features.rounded) {
     strokes.push({ kind: "dot", center: end, radius: style.strokeWidth });
+  } else if (markOverflow) {
+    strokes.push(buildOverflowMark(start, style));
   }
-  if (markOverflow) strokes.push(buildOverflowMark(start, style));
-  return strokes;
+  return { strokes: clampStrokes(strokes, style.viewBoxSize), chainStart: clampPoint(start, style.viewBoxSize), chainEnd: clampPoint(end, style.viewBoxSize) };
 }
 
 /** A smaller mark in the ascender band above x-height, composed onto a base consonant glyph at word-composition time rather than stored as part of it (abugida vowel diacritics). Previously drew its primary stroke across the same full x-height→baseline band as a consonant (the ascender-band placement only ever applied to the optional rounding dot) — now the primary stroke itself lives in the ascender band, keyed by height, so diacritics actually read as a small mark riding above the base glyph. */
@@ -388,7 +468,7 @@ function buildVowelDiacriticStrokes(phoneme: VowelPhoneme, style: ScriptStyle, g
   if (phoneme.features.rounded) {
     strokes.push({ kind: "dot", center: end, radius: style.strokeWidth * 0.8 });
   }
-  return strokes;
+  return clampStrokes(strokes, style.viewBoxSize);
 }
 
 function buildSyllableStrokes(
@@ -401,10 +481,18 @@ function buildSyllableStrokes(
 ): Stroke[] {
   const vowel = phonology.vowels.find((v) => v.id === vowelId);
   if (!vowel) return [];
-  const vowelStrokes = buildVowelStrokes(vowel, style, geometry, rng);
+  const vowelSet = buildVowelStrokes(vowel, style, geometry, rng);
   const consonant = consonantId ? phonology.consonants.find((c) => c.id === consonantId) : undefined;
-  if (!consonant) return vowelStrokes;
-  return [...buildConsonantStrokes(consonant, style, geometry, rng), ...vowelStrokes];
+  if (!consonant) return vowelSet.strokes;
+  const consonantSet = buildConsonantStrokes(consonant, style, geometry, rng);
+  // The consonant and vowel are each their own independently-built connected
+  // chain (different xBias/yBand) — concatenating their strokes alone never
+  // joins them to one another, only within themselves. A short bridge line
+  // from the consonant's own chain end to the vowel's own chain start makes
+  // the pair read as one syllable glyph instead of two adjacent, unrelated
+  // letterforms sharing an id.
+  const bridge: Stroke = { kind: "line", from: consonantSet.chainEnd, to: vowelSet.chainStart };
+  return [...consonantSet.strokes, bridge, ...vowelSet.strokes];
 }
 
 /** Logographic glyphs have no phoneme features to key off — composed from the full stroke vocabulary across the whole grid instead of a manner/place-constrained family. */
@@ -412,7 +500,7 @@ function buildConceptStrokes(style: ScriptStyle, geometry: GeometryProfile, rng:
   const yBand: [number, number] = [style.xHeightY, style.baselineY];
   const count = rng.int(style.strokeCountRange[0], style.strokeCountRange[1] + 1);
   const xBias = rng.float();
-  return buildConnectedStrokes(ALL_STROKE_KINDS, count, xBias, yBand, style, geometry, rng).strokes;
+  return clampStrokes(buildConnectedStrokes(ALL_STROKE_KINDS, count, xBias, yBand, style, geometry, rng).strokes, style.viewBoxSize);
 }
 
 const PREVIEW_SAMPLE_COUNT = 4;
@@ -452,7 +540,7 @@ export function sampleGlyphs(
         return phonology.consonants.slice(0, PREVIEW_SAMPLE_COUNT).map((c) => ({
           id: c.id,
           kind: "consonant" as const,
-          strokes: buildConsonantStrokes(c, style, geometry, rng),
+          strokes: buildConsonantStrokes(c, style, geometry, rng).strokes,
           seed: placeholderSeed,
           locked: false,
         }));
@@ -465,7 +553,7 @@ export function sampleGlyphs(
           {
             id: consonant.id,
             kind: "consonant" as const,
-            strokes: buildConsonantStrokes(consonant, style, geometry, rng),
+            strokes: buildConsonantStrokes(consonant, style, geometry, rng).strokes,
             seed: placeholderSeed,
             locked: false,
           },
@@ -700,12 +788,12 @@ function alphabeticPlan(
   const consonants = planWithOverflow(phonology.consonants, CONSONANT_GLYPH_BUDGET, overflowStrategy, seedBase, (c, markOverflow) => ({
     id: c.id,
     kind: "consonant" as const,
-    build: (rng: Rng) => buildConsonantStrokes(c, style, geometry, rng, markOverflow),
+    build: (rng: Rng) => buildConsonantStrokes(c, style, geometry, rng, markOverflow).strokes,
   }));
   const vowels = planWithOverflow(phonology.vowels, VOWEL_GLYPH_BUDGET, overflowStrategy, seedBase, (v, markOverflow) => ({
     id: v.id,
     kind: "vowel" as const,
-    build: (rng: Rng) => buildVowelStrokes(v, style, geometry, rng, markOverflow),
+    build: (rng: Rng) => buildVowelStrokes(v, style, geometry, rng, markOverflow).strokes,
   }));
   return { plan: [...consonants.plan, ...vowels.plan], rules: [...consonants.rules, ...vowels.rules] };
 }
@@ -720,7 +808,7 @@ function abjadPlan(
   return planWithOverflow(phonology.consonants, CONSONANT_GLYPH_BUDGET, overflowStrategy, seedBase, (c, markOverflow) => ({
     id: c.id,
     kind: "consonant" as const,
-    build: (rng: Rng) => buildConsonantStrokes(c, style, geometry, rng, markOverflow),
+    build: (rng: Rng) => buildConsonantStrokes(c, style, geometry, rng, markOverflow).strokes,
   }));
 }
 
@@ -735,7 +823,7 @@ function abugidaPlan(
   const consonants = planWithOverflow(phonology.consonants, CONSONANT_GLYPH_BUDGET, overflowStrategy, seedBase, (c, markOverflow) => ({
     id: c.id,
     kind: "consonant" as const,
-    build: (rng: Rng) => buildConsonantStrokes(c, style, geometry, rng, markOverflow),
+    build: (rng: Rng) => buildConsonantStrokes(c, style, geometry, rng, markOverflow).strokes,
   }));
   const vowelPlan: GlyphPlan[] = phonology.vowels.map((v) => ({
     id: `diacritic:${v.id}`,
