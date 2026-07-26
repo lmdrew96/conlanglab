@@ -7,6 +7,7 @@
 
 export { generatePhonology, sampleClusters, sampleSyllables } from "../../../convex/phonology/generate";
 export { ALL_TARGETS, DEFAULT_PARAMS } from "../../../convex/phonology/types";
+export { freshSeed } from "../../../convex/lib/rng";
 
 export type { SampledUnit } from "../../../convex/phonology/generate";
 export type {
