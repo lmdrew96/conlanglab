@@ -39,6 +39,12 @@ yarn-error.log*
 # IDE
 .idea/
 
+# Reference fonts for orthography design work — real constructed-script faces
+# measured with fontTools to calibrate the glyph generator (rail alignment,
+# aspect ratio, contour count). Not shipped, not read at runtime; the fonts
+# the app actually loads live directly in fonts/.
+/fonts/scripts/
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts
