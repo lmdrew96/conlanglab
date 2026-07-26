@@ -752,6 +752,18 @@ function scheduleApproximant(cursor: Cursor, phoneme: ConsonantPhoneme): void {
   at(cursor, (e) => {
     e.Glottis.isTouched = true;
     fadeGlottisIn(e);
+    // The vendor engine's own Glottis.intensity climbs by +0.13 per
+    // 512-sample block (~90-100ms to reach 1 from 0 — see finishBlock in
+    // @seansleblanc/pink-trombone's index.js) rather than snapping to 1 the
+    // moment isTouched flips true. scheduleMuteZero already bypasses this
+    // same mechanism in the other direction (a hard write instead of
+    // waiting on the model's own ~230ms decay) for exactly this reason.
+    // Without the same bypass here, an approximant immediately following a
+    // voiceless consonant (no isTouched=true head start of its own — see
+    // scheduleFricative) spends most or all of its short hold still
+    // ramping up from near-silence: reported as a "pop of silence" in
+    // clusters like /pl/.
+    e.Glottis.intensity = 1;
     e.Glottis.UIFrequency = pitch;
     e.Glottis.UITenseness = NEUTRAL_TENSENESS;
     setShape(e, shape);
@@ -797,6 +809,12 @@ function scheduleTapOrTrill(
     at(cursor, (e) => {
       e.Glottis.isTouched = true;
       fadeGlottisIn(e);
+      // Same bypass as scheduleApproximant's — the vendor's own intensity
+      // ramp (~90-100ms to climb from 0) is longer than a tap's entire
+      // closeDur+openDur, so without forcing it here a tap right after a
+      // voiceless consonant (e.g. /fr/, /bɾ/) could finish before its
+      // voicing ever caught up — the reported "pop of silence."
+      if (i === 0) e.Glottis.intensity = 1;
       setShape(e, constrict(REST_SHAPE, index, 2, 0.1));
     });
     cursor.time += closeDur;
