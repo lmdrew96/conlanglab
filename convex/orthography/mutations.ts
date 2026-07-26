@@ -127,7 +127,7 @@ export const reroll = mutation({
       now: Date.now(),
     });
 
-    await ctx.db.patch(row._id, { data });
+    await ctx.db.patch(row._id, { data, staleSince: null });
     await appendHistory(ctx, { languageId, stage: "orthography", data, trigger: "reroll", diffFn: diffOrthography });
   },
 });
@@ -160,7 +160,7 @@ export const nudge = mutation({
       now: Date.now(),
     });
 
-    await ctx.db.patch(row._id, { data });
+    await ctx.db.patch(row._id, { data, staleSince: null });
     await appendHistory(ctx, { languageId, stage: "orthography", data, trigger: "nudge", diffFn: diffOrthography });
   },
 });
