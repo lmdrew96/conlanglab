@@ -1,12 +1,12 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Work_Sans, Geist_Mono } from "next/font/google";
 import localFont from "next/font/local";
 import "./globals.css";
 import { Providers } from "@/components/providers";
 import { ThemeGate } from "@/components/theme-gate";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+const bodySans = Work_Sans({
+  variable: "--font-body",
   subsets: ["latin"],
 });
 
@@ -35,7 +35,7 @@ export default function RootLayout({
     <html
       lang="en"
       data-theme="vernacular"
-      className={`${geistSans.variable} ${geistMono.variable} ${inLivingColor.variable} h-full antialiased`}
+      className={`${bodySans.variable} ${geistMono.variable} ${inLivingColor.variable} h-full antialiased`}
     >
       <body className="flex min-h-full flex-col bg-bg text-text">
         <Providers>
