@@ -138,7 +138,7 @@ export function LanguageDetail({ id }: { id: string }) {
                 <li key={key}>
                   <Link
                     href={`/language/${id}/${route}`}
-                    className="flex items-center justify-between rounded-md border border-border bg-surface px-4 py-3 hover:bg-surface-hover"
+                    className="flex items-center justify-between rounded-md border border-border bg-surface px-4 py-3 shadow-sm shadow-accent/5 transition-colors hover:border-accent/40 hover:bg-surface-hover"
                   >
                     {content}
                   </Link>
@@ -149,7 +149,7 @@ export function LanguageDetail({ id }: { id: string }) {
             return (
               <li
                 key={key}
-                className="flex items-center justify-between rounded-md border border-border bg-surface px-4 py-3"
+                className="flex items-center justify-between rounded-md border border-border bg-surface px-4 py-3 shadow-sm shadow-accent/5"
               >
                 {content}
               </li>

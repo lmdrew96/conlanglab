@@ -44,7 +44,7 @@ export function LanguageLibrary() {
         <button
           type="submit"
           disabled={creating || !name.trim()}
-          className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-accent-text hover:bg-accent-hover disabled:opacity-50"
+          className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-accent-text shadow-sm shadow-accent/30 hover:bg-accent-hover disabled:opacity-50 disabled:shadow-none"
         >
           Create
         </button>
@@ -64,7 +64,7 @@ export function LanguageLibrary() {
         {languages?.map((lang) => (
           <li
             key={lang._id}
-            className="flex items-center justify-between rounded-md border border-border bg-surface px-4 py-3 hover:bg-surface-hover"
+            className="flex items-center justify-between rounded-md border border-border bg-surface px-4 py-3 shadow-sm shadow-accent/5 transition-colors hover:border-accent/40 hover:bg-surface-hover"
           >
             <Link href={`/language/${lang._id}`} className="flex-1">
               <span className={`${inLivingColor.className} text-xl font-medium text-text`}>{lang.name}</span>
