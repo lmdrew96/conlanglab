@@ -110,6 +110,18 @@ export interface LexiconItemData {
   phonemeIds: string[];
   /** Index into `phonemeIds` of the primary-stressed vowel (matches the ˈ mark in `phonologicalForm`) — undefined when the phonology's stress pattern is "none", or for roots generated before this field existed (audio playback falls back to uniform, unstressed timing in that case). */
   stressedPhonemeIndex?: number;
+  /**
+   * One contrastive tone level (0..phonology.tone.levels-1) per syllable, in
+   * syllable order — parallel to how `stressedPhonemeIndex` keys off the
+   * root's own syllable structure rather than a separate per-word record.
+   * Undefined when `phonology.tone.levels` tone isn't enabled, for roots
+   * generated before this field existed, and for derived items (Section
+   * 5.5) — affix-level tone is out of scope for now (tonal morphology is
+   * real, but needs its own design pass; see the ChaosPatch this field
+   * shipped from). Contour tone (`phonology.tone.contours`) isn't modeled
+   * yet either — every value here is a flat level, not a contour shape.
+   */
+  toneValues?: number[];
   /** For compounds only: the two component concept ids whose roots were combined. */
   componentIds?: [string, string];
   /**

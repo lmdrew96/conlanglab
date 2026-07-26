@@ -2,8 +2,8 @@
 
 import { GlyphSvg } from "@/components/orthography/glyph-svg";
 import { SpeakerIcon } from "@/components/icons";
-import { resolveGlyphById } from "@/lib/orthography/engine";
-import type { GlyphSequenceStep, OrthographyStageData } from "@/lib/orthography/engine";
+import { buildToneMarkStrokes, resolveGlyphById } from "@/lib/orthography/engine";
+import type { Glyph, GlyphSequenceStep, OrthographyStageData } from "@/lib/orthography/engine";
 import { boundaryTreatmentInfo, boundaryTreatmentMark } from "@/lib/orthography/format";
 import { formatAffixForm, formatHumanGloss, formatLeipzigGloss, formatValueLabel } from "@/lib/morphology/format";
 import { playRoot } from "@/lib/lexicon/audio";
@@ -60,6 +60,19 @@ function GlyphRun({
         const glyph = resolveGlyphById(step.glyphId, orthography, phonology);
         const diacritic = step.diacriticGlyphId ? resolveGlyphById(step.diacriticGlyphId, orthography, phonology) : null;
         const extras = (step.extraGlyphIds ?? []).map((id) => resolveGlyphById(id, orthography, phonology));
+        // Never a stored glyph (see GlyphSequenceStep.toneLevel) — built fresh
+        // from the language's own contrastive level count on every render,
+        // same "compose live" treatment as the rest of this word.
+        const toneMark: Glyph | null =
+          step.toneLevel !== undefined
+            ? {
+                id: `tone:${step.toneLevel}`,
+                kind: "vowelDiacritic",
+                strokes: buildToneMarkStrokes(step.toneLevel, phonology.tone.levels, orthography.scriptStyle),
+                seed: { base: 0, variation: 0 },
+                locked: false,
+              }
+            : null;
         return (
           <span key={`${step.glyphId}-${i}`} className="flex items-center gap-0.5">
             {step.junctionBefore && (
@@ -70,7 +83,9 @@ function GlyphRun({
             {glyph ? (
               // A vowel diacritic composes onto its carrier consonant rather
               // than sitting beside it — overlaid in the same box, which is
-              // what an abugida actually does.
+              // what an abugida actually does. A tone mark overlays the same
+              // way, in its own thin band above the diacritic (see
+              // buildToneMarkStrokes) so the two never collide.
               <span className="relative inline-flex">
                 <GlyphSvg glyph={glyph} style={orthography.scriptStyle} className="h-10 w-10" />
                 {diacritic && (
@@ -78,6 +93,13 @@ function GlyphRun({
                     glyph={diacritic}
                     style={orthography.scriptStyle}
                     className="absolute inset-0 h-10 w-10 text-accent"
+                  />
+                )}
+                {toneMark && (
+                  <GlyphSvg
+                    glyph={toneMark}
+                    style={orthography.scriptStyle}
+                    className="absolute inset-0 h-10 w-10 text-text"
                   />
                 )}
               </span>

@@ -6,6 +6,7 @@
 export {
   buildGlyphForSyllable,
   buildScriptStyle,
+  buildToneMarkStrokes,
   composeWordGlyphSequence,
   extractAttestedSyllables,
   resolveBoundaryTreatment,

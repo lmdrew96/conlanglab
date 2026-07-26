@@ -172,13 +172,19 @@ function absoluteVowelIndex(syllables: Array<Array<ConsonantPhoneme | VowelPhone
   return withinSyllable === -1 ? undefined : offset + withinSyllable;
 }
 
+/** One random contrastive level per syllable — the simplest defensible assignment rule (design doc Section 4.4 leaves the exact rule open; see the ChaosPatch this shipped from). Contour tone isn't modeled — every value is a flat level, not a contour shape. */
+function buildToneValues(rng: Rng, phonology: PhonologyData, syllableCount: number): number[] | undefined {
+  if (!phonology.tone.enabled) return undefined;
+  return Array.from({ length: syllableCount }, () => rng.int(0, phonology.tone.levels - 1));
+}
+
 /** Build a root's phonemes + rendered IPA form (syllable-dotted, primary-stress-marked). */
 function buildRoot(
   rng: Rng,
   phonology: PhonologyData,
   syllableCount: number,
   tier: FrequencyTier,
-): { phonemeIds: string[]; phonologicalForm: string; stressedPhonemeIndex?: number } {
+): { phonemeIds: string[]; phonologicalForm: string; stressedPhonemeIndex?: number; toneValues?: number[] } {
   const syllables: Array<Array<ConsonantPhoneme | VowelPhoneme>> = [];
   for (let i = 0; i < syllableCount; i++) syllables.push(buildSyllableForTier(rng, phonology, tier));
 
@@ -192,6 +198,7 @@ function buildRoot(
     phonemeIds: syllables.flat().map((p) => p.id),
     phonologicalForm: rendered,
     stressedPhonemeIndex: stressIndex === -1 ? undefined : absoluteVowelIndex(syllables, stressIndex),
+    toneValues: buildToneValues(rng, phonology, syllableCount),
   };
 }
 
@@ -221,6 +228,7 @@ function buildRootItem(
     phonologicalForm: built.phonologicalForm,
     phonemeIds: built.phonemeIds,
     stressedPhonemeIndex: built.stressedPhonemeIndex,
+    toneValues: built.toneValues,
     seed,
     locked: false,
   };
@@ -240,6 +248,13 @@ function buildCompoundItem(compound: CompoundConcept, a: LexiconItemData, b: Lex
     phonologicalForm: form,
     phonemeIds: [...a.phonemeIds, ...b.phonemeIds],
     stressedPhonemeIndex: a.stressedPhonemeIndex,
+    // Compounding only concatenates whole syllables from each component, so
+    // (unlike derivation) each component's own per-syllable tone values
+    // still line up 1:1 with its syllables in the combined form — safe to
+    // concatenate directly. Only when both sides have tone data; a mix of
+    // one tone-bearing and one pre-tone-field component would misalign a
+    // partial array against the combined syllable count.
+    toneValues: a.toneValues && b.toneValues ? [...a.toneValues, ...b.toneValues] : undefined,
     componentIds: compound.components,
     seed,
     locked: false,

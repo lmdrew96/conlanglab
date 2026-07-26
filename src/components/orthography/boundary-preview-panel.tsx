@@ -46,7 +46,7 @@ export function BoundaryPreviewPanel({
     if (affixes.length === 0) return null;
 
     const assembled = applyAffixesToRoot(root, affixes, phonology, allomorphy);
-    const composed = composeWordGlyphSequence(assembled, affixes, phonology, data.mapping, data.params.aesthetic);
+    const composed = composeWordGlyphSequence(assembled, affixes, phonology, data.mapping, data.params.aesthetic, root.toneValues);
     return { root, affixes, assembled, composed };
   }, [lexiconItems, morphologyItems, phonology, allomorphy, data]);
 

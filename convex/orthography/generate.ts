@@ -768,6 +768,29 @@ function buildVowelDiacriticStrokes(phoneme: VowelPhoneme, style: ScriptStyle, g
 }
 
 /**
+ * A tone mark composed onto a vowel-bearing glyph at word-composition time
+ * (see composeWordGlyphSequence), never stored as part of the base glyph —
+ * tone is a per-word Lexicon value (LexiconItemData.toneValues), not a
+ * phoneme-catalog feature, so unlike every other mark in this file it has no
+ * fixed per-phoneme home to live in. `levels` is language-specific
+ * (phonology.tone.levels, 2-5), so position is a continuous t = level /
+ * (levels-1) rather than a fixed Record table — the same "position encodes a
+ * feature" idiom VOWEL_HEIGHT_Y uses, just computed instead of looked up
+ * since the number of contrastive levels varies per language. Sits in a
+ * thin strip above the vowel-diacritic band (buildVowelDiacriticStrokes) so
+ * an abugida vowel can carry both marks without them colliding.
+ */
+export function buildToneMarkStrokes(level: number, levels: number, style: ScriptStyle): Stroke[] {
+  const bandTop = 0;
+  const bandBottom = style.xHeightY * 0.12;
+  const t = levels <= 1 ? 0.5 : level / (levels - 1);
+  const y = bandTop + t * (bandBottom - bandTop);
+  const width = (style.viewBoxSize - style.sideBearing * 2) * 0.3;
+  const left = (style.viewBoxSize - width) / 2;
+  return clampStrokes([{ kind: "line", from: { x: left, y }, to: { x: left + width, y } }], style.viewBoxSize);
+}
+
+/**
  * One syllable = one glyph on ONE armature: the consonant picks the primary
  * attachment and the vowel a second one on the same skeleton. v1 built the
  * consonant and vowel as two independent chains in different regions and
@@ -1514,6 +1537,17 @@ export interface GlyphSequenceStep {
   /** A GraphemeRule's digraph/homograph substitution — additional glyphs rendered right after glyphId, same phoneme, no junction between them. */
   extraGlyphIds?: string[];
   junctionBefore: BoundaryTreatment | null;
+  /**
+   * This step's vowel-nucleus tone level, 0..rootToneValues length-implied
+   * levels-1 — set only for a vowel-bearing step whose vowel falls within
+   * the root's own WordSegment (composeWordGlyphSequence's `rootToneValues`
+   * param). Affix-introduced vowels never carry a tone value (see
+   * LexiconItemData.toneValues — affix-level tone is out of scope for now).
+   * Render with buildToneMarkStrokes, same "compose live, don't build a
+   * stored glyph for it" treatment as everything else in this file that
+   * depends on more than the phoneme catalog alone.
+   */
+  toneLevel?: number;
 }
 
 export interface ComposedWord {
@@ -1534,7 +1568,10 @@ export interface ComposedWord {
  * buildExampleSentences. `affixesUsed` must be the same list (in the same
  * order) passed to convex/morphology/generate.ts's applyAffixesToRoot to
  * produce `assembled`, so segment sources can be resolved back to their
- * originating affix.
+ * originating affix. `rootToneValues` is the source root's own
+ * LexiconItemData.toneValues (undefined when tone isn't enabled, or the
+ * root predates the field) — mapped onto the root's WordSegment span only,
+ * since affix-introduced vowels have no tone value of their own yet.
  */
 export function composeWordGlyphSequence(
   assembled: AssembledWord,
@@ -1542,12 +1579,15 @@ export function composeWordGlyphSequence(
   phonology: PhonologyData,
   mapping: SoundToSymbolMapping,
   aesthetic: Aesthetic,
+  rootToneValues?: number[],
 ): ComposedWord {
   const resolved = resolvePhonemes(assembled.phonemeIds, phonology);
   if (!resolved) return { steps: [], nonSegmentalTreatment: null };
 
   const groups = groupIntoGraphemes(resolved, mapping);
   const affixesById = new Map(affixesUsed.map((a) => [a.id, a] as const));
+  const rootSegment = assembled.segments.find((s) => s.source === "root");
+  let rootVowelCount = 0;
 
   const steps: GlyphSequenceStep[] = groups.map((group, i) => {
     let junctionBefore: BoundaryTreatment | null = null;
@@ -1556,7 +1596,21 @@ export function composeWordGlyphSequence(
       const affix = segmentAtStart ? affixesById.get(segmentAtStart.source) : undefined;
       junctionBefore = affix ? resolveBoundaryTreatment(affix.strategy, aesthetic) : "adjacency";
     }
-    return { glyphId: group.glyphId, diacriticGlyphId: group.diacriticGlyphId, extraGlyphIds: group.extraGlyphIds, junctionBefore };
+    // A group's own vowel (if it has one) always resolves to the last
+    // phoneme in its span — true across every mapping kind: alphabetic's
+    // single-phoneme groups, abugida/syllabic's CV pairs, and bare-V groups
+    // alike. A consonant-only group (an abugida/syllabic coda with no
+    // following vowel) has no tone-bearing position, so isVowel guards it.
+    let toneLevel: number | undefined;
+    if (rootToneValues && rootSegment) {
+      const vowelIndex = group.end - 1;
+      const vowel = resolved[vowelIndex];
+      if (vowel && isVowel(vowel) && vowelIndex >= rootSegment.start && vowelIndex < rootSegment.end) {
+        toneLevel = rootToneValues[rootVowelCount];
+        rootVowelCount++;
+      }
+    }
+    return { glyphId: group.glyphId, diacriticGlyphId: group.diacriticGlyphId, extraGlyphIds: group.extraGlyphIds, junctionBefore, toneLevel };
   });
 
   const nonSegmental = affixesUsed.find((a) => a.strategy === "ablaut" || a.strategy === "templatic");

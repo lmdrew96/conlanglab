@@ -917,7 +917,7 @@ export function translate(args: TranslateArgs): TranslationResult {
       const composed =
         mapping.kind === "logographic"
           ? { steps: logographicSteps(word.item, mapping), nonSegmentalTreatment: null }
-          : composeWordGlyphSequence(assembled, applied, phonology, mapping, aesthetic);
+          : composeWordGlyphSequence(assembled, applied, phonology, mapping, aesthetic, word.item.toneValues);
 
       return {
         source: word.source,
