@@ -47,6 +47,8 @@ import type * as syntax_generate from "../syntax/generate.js";
 import type * as syntax_mutations from "../syntax/mutations.js";
 import type * as syntax_queries from "../syntax/queries.js";
 import type * as syntax_types from "../syntax/types.js";
+import type * as translate_content from "../translate/content.js";
+import type * as translate_translate from "../translate/translate.js";
 
 import type {
   ApiFromModules,
@@ -94,6 +96,8 @@ declare const fullApi: ApiFromModules<{
   "syntax/mutations": typeof syntax_mutations;
   "syntax/queries": typeof syntax_queries;
   "syntax/types": typeof syntax_types;
+  "translate/content": typeof translate_content;
+  "translate/translate": typeof translate_translate;
 }>;
 
 /**

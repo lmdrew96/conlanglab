@@ -107,6 +107,7 @@ export function LanguageDetail({ id }: { id: string }) {
           )}
         </div>
 
+        <h2 className="text-xs font-medium uppercase tracking-wide text-text-muted">Generation stages</h2>
         <ul className="flex flex-col gap-2">
           {STAGES.map(({ key, label }) => {
             const content = (
@@ -149,6 +150,20 @@ export function LanguageDetail({ id }: { id: string }) {
             );
           })}
         </ul>
+
+        {/* Deliberately its own group, not a sixth stage: Translate generates
+            no language material — it reads the five stages above and writes
+            English through them. */}
+        <div className="flex flex-col gap-2">
+          <h2 className="text-xs font-medium uppercase tracking-wide text-text-muted">Tools</h2>
+          <Link
+            href={`/language/${id}/translate`}
+            className="flex items-center justify-between rounded-md border border-border bg-surface px-4 py-3 hover:bg-surface-hover"
+          >
+            <span className="font-medium text-text">Translate</span>
+            <span className="text-xs text-text-muted">Write English in your script — Open →</span>
+          </Link>
+        </div>
       </div>
     </div>
   );

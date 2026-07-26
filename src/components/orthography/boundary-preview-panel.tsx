@@ -4,8 +4,8 @@ import { useMemo } from "react";
 import { GlyphSvg } from "@/components/orthography/glyph-svg";
 import { applyAffixesToRoot, dedupeAffixesByCategorySignature } from "@/lib/morphology/engine";
 import type { AllomorphyData, MorphologyAffixData } from "@/lib/morphology/engine";
-import { buildGlyphForSyllable, composeWordGlyphSequence } from "@/lib/orthography/engine";
-import type { Glyph, OrthographyStageData } from "@/lib/orthography/engine";
+import { composeWordGlyphSequence, resolveGlyphById } from "@/lib/orthography/engine";
+import type { OrthographyStageData } from "@/lib/orthography/engine";
 import type { LexiconItemData } from "@/lib/lexicon/engine";
 import type { PhonologyData } from "@/lib/phonology/engine";
 
@@ -14,22 +14,6 @@ const JUNCTION_LABEL: Record<"adjacency" | "ligature" | "diacritic", string> = {
   ligature: "‿",
   diacritic: "⁺",
 };
-
-/** A stored glyph if it exists; otherwise built live (syllabic scripts only carry the attested-at-generation-time syllable set — anything new an affix creates gets composed on demand, never treated as "unmapped"). */
-function resolveGlyph(id: string, data: OrthographyStageData, phonology: PhonologyData): Glyph | null {
-  const stored = data.glyphs.find((g) => g.id === id);
-  if (stored) return stored;
-  if (data.mapping.kind !== "syllabic") return null;
-  const [consonantPart, vowelId] = id.split("+");
-  if (!vowelId) return null;
-  return buildGlyphForSyllable(
-    consonantPart === "_" ? null : consonantPart,
-    vowelId,
-    phonology,
-    data.scriptStyle,
-    data.seed.base,
-  );
-}
 
 /**
  * Demonstrates design doc Section 8.3's boundary-rendering ask: samples one
@@ -95,8 +79,8 @@ export function BoundaryPreviewPanel({
       </p>
       <div className="flex flex-wrap items-center gap-1 rounded-md border border-border bg-bg p-3 text-text">
         {example.composed.steps.map((step, i) => {
-          const glyph = resolveGlyph(step.glyphId, data, phonology);
-          const extraGlyphs = (step.extraGlyphIds ?? []).map((id) => resolveGlyph(id, data, phonology));
+          const glyph = resolveGlyphById(step.glyphId, data, phonology);
+          const extraGlyphs = (step.extraGlyphIds ?? []).map((id) => resolveGlyphById(id, data, phonology));
           return (
             <span key={`${step.glyphId}-${i}`} className="flex items-center gap-1">
               {step.junctionBefore && (

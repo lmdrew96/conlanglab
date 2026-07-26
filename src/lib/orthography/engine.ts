@@ -9,6 +9,7 @@ export {
   composeWordGlyphSequence,
   extractAttestedSyllables,
   resolveBoundaryTreatment,
+  resolveGlyphById,
   sampleGlyphs,
   syllableGlyphId,
 } from "../../../convex/orthography/generate";

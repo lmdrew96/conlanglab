@@ -1,4 +1,25 @@
-import type { AncestorScriptFamily, Aesthetic, OverflowStrategy, ScriptCategory } from "./engine";
+import type { AncestorScriptFamily, Aesthetic, BoundaryTreatment, OverflowStrategy, ScriptCategory } from "./engine";
+
+/** The mark drawn between two glyphs at a morpheme junction (design doc Section 8.3). Shared by every surface that renders a composed word so the same junction never reads two different ways. */
+const BOUNDARY_TREATMENT_MARKS: Record<BoundaryTreatment, string> = {
+  adjacency: "·",
+  ligature: "‿",
+  diacritic: "⁺",
+};
+
+export function boundaryTreatmentMark(treatment: BoundaryTreatment): string {
+  return BOUNDARY_TREATMENT_MARKS[treatment];
+}
+
+const BOUNDARY_TREATMENT_LABELS: Record<BoundaryTreatment, string> = {
+  adjacency: "Adjacent — the affix's glyphs simply sit next to the root's",
+  ligature: "Ligature — a connecting stroke joins the affix to the root",
+  diacritic: "Diacritic — the affix is marked on the root's own glyph rather than beside it",
+};
+
+export function boundaryTreatmentInfo(treatment: BoundaryTreatment): string {
+  return BOUNDARY_TREATMENT_LABELS[treatment];
+}
 
 const SCRIPT_CATEGORY_LABELS: Record<ScriptCategory, string> = {
   alphabetic: "Alphabetic",

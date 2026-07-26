@@ -267,6 +267,14 @@ export function OrthographyPage({ languageId }: { languageId: Id<"languages"> })
                   data={committed}
                 />
               )}
+
+              <p className="text-xs text-text-muted">
+                Want to see your own words in this script?{" "}
+                <Link href={`/language/${languageId}/translate`} className="text-accent hover:underline">
+                  Translate
+                </Link>{" "}
+                writes any English phrase through your lexicon, morphology and syntax into these glyphs.
+              </p>
             </div>
 
             <HistorySidebar languageId={languageId} stageLocked={stageLocked} />

@@ -939,6 +939,23 @@ export function buildGlyphForSyllable(
   };
 }
 
+/**
+ * The stored glyph for `id`, or one built on demand when the script is
+ * syllabic and the syllable simply wasn't attested at generation time (an
+ * affix attachment routinely creates a CV mora the lexicon never had) —
+ * "not yet materialized," not "unmapped," per buildGlyphForSyllable's own
+ * contract. Every surface that renders a composed word needs exactly this
+ * lookup, so it lives here rather than being reimplemented per panel.
+ */
+export function resolveGlyphById(id: string, data: OrthographyStageData, phonology: PhonologyData): Glyph | null {
+  const stored = data.glyphs.find((g) => g.id === id);
+  if (stored) return stored;
+  if (data.mapping.kind !== "syllabic") return null;
+  const [consonantPart, vowelId] = id.split("+");
+  if (!vowelId) return null;
+  return buildGlyphForSyllable(consonantPart === "_" ? null : consonantPart, vowelId, phonology, data.scriptStyle, data.seed.base);
+}
+
 // --- Glyph-set resolution (per script category, with locked-carryover/nudge-keep) ---
 
 interface GlyphPlan {
