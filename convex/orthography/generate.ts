@@ -9,20 +9,28 @@
 
 import { Rng, deriveSeed } from "../lib/rng";
 import {
+  AESTHETIC_ARMATURE_POOL,
   AESTHETIC_STYLE_PRESETS,
-  ALL_STROKE_KINDS,
   ANCESTOR_SCRIPT_BIAS,
+  ANCHOR_STOP_RANGE,
+  ASPECT_RANGE,
+  ATTACHMENT_BY_MANNER,
   BOUNDARY_TREATMENT_TABLE,
+  CONCEPT_ATTACHMENT_BUDGET,
+  CONCEPT_ATTACHMENT_PREFERENCE,
   ORIENTATION_BY_PLACE,
-  SECONDARY_MARK_ANGLE,
-  STROKE_FAMILY_BY_MANNER,
+  SCRIPT_ATTACHMENT_VOCABULARY_RANGE,
+  SECONDARY_MARK_POSITION,
+  SYLLABLE_ATTACHMENT_BUDGET,
+  VOWEL_ATTACHMENT_PREFERENCE,
   VOWEL_BACKNESS_X,
   VOWEL_HEIGHT_Y,
-  VOWEL_STROKE_KINDS,
 } from "./content";
 import type {
   AncestorScriptFamily,
   Aesthetic,
+  ArmatureKind,
+  AttachmentKind,
   BoundaryTreatment,
   Glyph,
   GlyphKind,
@@ -32,6 +40,7 @@ import type {
   OrthographyStageData,
   OverflowStrategy,
   Point,
+  ScriptArmature,
   ScriptCategory,
   ScriptStyle,
   Seed,
@@ -41,7 +50,7 @@ import type {
 import { isVowel, resolvePhonemes } from "../morphology/generate";
 import type { AssembledWord } from "../morphology/generate";
 import type { AffixStrategy, MorphologyAffixData } from "../morphology/types";
-import type { ConsonantPhoneme, PhonemeTier, PhonologyData, VowelHeight, VowelPhoneme } from "../phonology/types";
+import type { ConsonantPhoneme, PhonemeTier, PhonologyData, VowelPhoneme } from "../phonology/types";
 import type { LexiconItemData } from "../lexicon/types";
 
 const DEFAULT_NUDGE_KEEP_PROBABILITY = 0.75;
@@ -63,361 +72,535 @@ export function syllableGlyphId(consonantId: string | null, vowelId: string): st
 
 const STYLE_SALT = 0xc0ffee;
 
+/** Hard cap on a script's lean. Past this the shear eats enough horizontal room that the glyph either overflows the viewBox or has to be squashed narrower than the reference aspect band allows. */
+const MAX_SLANT = 0.2;
+
+/**
+ * A script's structural identity: the one armature every glyph in it is
+ * built on, and the narrow attachment vocabulary those glyphs may draw from.
+ * Derived once per (aesthetic, seed.base, ancestorScript) and then held
+ * fixed — this is what makes a generated set read as a single script rather
+ * than N unrelated shapes, and it is the thing v1 never had (see
+ * ScriptStyle's doc comment in types.ts).
+ */
+function buildScriptArmature(aesthetic: Aesthetic, ancestorScript: AncestorScriptFamily | null, rng: Rng): ScriptArmature {
+  const aestheticPool = AESTHETIC_ARMATURE_POOL[aesthetic];
+  const ancestor = ancestorScript ? ANCESTOR_SCRIPT_BIAS[ancestorScript] : null;
+
+  // An ancestor family narrows the armature choice to the skeletons that
+  // family actually uses; where that intersects nothing the aesthetic
+  // allows, the ancestor wins — picking "devanagari" should get a headline
+  // even under the invented aesthetic, since the skeleton IS the family
+  // resemblance being asked for.
+  const kindPool = ancestor ? (ancestor.kinds.filter((k) => aestheticPool.kinds.includes(k)).length > 0 ? ancestor.kinds.filter((k) => aestheticPool.kinds.includes(k)) : ancestor.kinds) : aestheticPool.kinds;
+  const kind = rng.pick(kindPool);
+
+  const attachmentPool = ancestor ? [...ancestor.attachments, ...aestheticPool.attachments.filter((a) => !ancestor.attachments.includes(a))] : aestheticPool.attachments;
+  const [vocabMin, vocabMax] = SCRIPT_ATTACHMENT_VOCABULARY_RANGE;
+  const attachments = rng.shuffle(attachmentPool).slice(0, rng.int(vocabMin, vocabMax));
+
+  // Every glyph needs one shape that can carry the structure its armature
+  // doesn't. A vocabulary of, say, {crossbar, flag} on a `none` armature has
+  // nothing that spans rail to rail, and every letter in that script would
+  // collapse to a single mark at one anchor stop. Prepending rather than
+  // replacing keeps the seeded vocabulary intact and just guarantees it can
+  // build a letter.
+  const loadBearing = loadBearingKinds(kind);
+  if (!attachments.some((a) => loadBearing.includes(a))) {
+    attachments.unshift(rng.pick(loadBearing.filter((k) => attachmentPool.includes(k)).length > 0 ? loadBearing.filter((k) => attachmentPool.includes(k)) : loadBearing));
+  }
+
+  const [stopMin, stopMax] = ANCHOR_STOP_RANGE;
+  return { kind, attachments, anchorStops: rng.int(stopMin, stopMax) };
+}
+
 /**
  * `strokeWidth` used to come straight off the 2-entry AESTHETIC_STYLE_PRESETS
  * table, so every script sharing an aesthetic had byte-identical "visual
- * weight" (line thickness, glyph density) — part of why regenerated scripts
- * all looked like the same font. Now derived per (aesthetic, seed.base)
- * within an aesthetic-appropriate envelope: invented stays the
- * thinner/sparser archetype and realLike the heavier/denser one on average,
- * but two scripts of the same aesthetic can still land anywhere in that
- * envelope — one bold and minimal, another thin and elaborate.
+ * weight" — part of why regenerated scripts all looked like the same font.
+ * Derived per (aesthetic, seed.base) within an aesthetic-appropriate
+ * envelope instead: invented stays the heavier/blockier archetype and
+ * realLike the finer one on average, but two scripts of the same aesthetic
+ * can still land anywhere in that envelope.
  *
- * `strokeCountRange` comes straight from AESTHETIC_STYLE_PRESETS again
- * (invented [2,4], realLike [2,5]) — it was temporarily pinned to near-1 by
- * the mark-restraint patch to fight contour-count inflation, but that
- * inflation was actually render.ts's glyphToSvgPath giving every chain
- * segment its own SVG "M" even when segments already share coordinates. Now
- * that connected segments merge into one subpath, a longer chain no longer
- * inflates the measured contour count, so there's no more reason to keep
- * glyphs near-constant-length.
+ * `sideBearing` is derived from a per-script target aspect ratio rather than
+ * being a constant, and it is the mechanism that gives a script consistent
+ * side bearings: since every glyph is built on the same armature inset by
+ * the same amount, glyph footprints no longer drift per phoneme the way v1's
+ * place-of-articulation `gridX` made them.
  */
-export function buildScriptStyle(aesthetic: Aesthetic, seedBase: number): ScriptStyle {
+export function buildScriptStyle(aesthetic: Aesthetic, seedBase: number, ancestorScript: AncestorScriptFamily | null = null): ScriptStyle {
   const preset = AESTHETIC_STYLE_PRESETS[aesthetic];
   const rng = new Rng(deriveSeed(seedBase, STYLE_SALT));
   const strokeWidth = aesthetic === "invented" ? rng.int(3, 6) : rng.int(2, 5);
-  return { version: 1, ...preset, strokeWidth };
+  const armature = buildScriptArmature(aesthetic, ancestorScript, rng);
+
+  const railHeight = preset.baselineY - preset.xHeightY;
+  const [aspectMin, aspectMax] = ASPECT_RANGE;
+  const ancestorAspect = ancestorScript ? ANCESTOR_SCRIPT_BIAS[ancestorScript].aspectBias : null;
+  // An ancestor family pins the aspect near its own characteristic
+  // proportion (Devanagari runs narrow, Hangul near-square) with a little
+  // seeded play around it; without one, the full reference-derived band.
+  const aspect = ancestorAspect !== null ? clamp(ancestorAspect + (rng.float() - 0.5) * 0.12, aspectMin, aspectMax) : aspectMin + rng.float() * (aspectMax - aspectMin);
+
+  const slant = (rng.float() * 2 - 1) * MAX_SLANT;
+  // `aspect` is the ratio of the glyph's TOTAL horizontal extent to its rail
+  // height — the same thing measured off the reference fonts' bounding boxes
+  // — so the shear has to come out of that budget, not be added on top of
+  // it. Charging it on top instead would inflate every leaning script's real
+  // aspect by |slant| (0.7 target rendering as 0.9) and push it clean out of
+  // the reference band. Floored at `strokeWidth` so the outermost stroke's
+  // own half-width still lands inside the box.
+  const totalExtent = aspect * railHeight;
+  const sideBearing = Math.max(strokeWidth, (preset.viewBoxSize - totalExtent) / 2);
+
+  return { version: 2, ...preset, strokeWidth, armature, sideBearing, slant };
 }
 
-// --- Stroke composition (Section 14.2's shared grid + shared stroke vocabulary) ---
-
-function gridX(bias: number, style: ScriptStyle, jitter: number): number {
-  const margin = style.viewBoxSize * 0.15;
-  const usable = style.viewBoxSize - margin * 2;
-  return margin + bias * usable + jitter;
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
-}
+// --- Armature geometry (the shared skeleton every glyph is built on) ---
 
 const GEOMETRY_SALT = 0xbeef;
 
 /**
- * A script's own "handwriting" — jitter spread, a consistent lean direction,
- * and hook/curve size ranges — derived once per (cornerStyle, seed.base) so
- * every reroll produces a structurally distinct-looking script instead of
- * reshuffling phonemes onto an identical fixed skeleton (the "orthography
- * variety" bug: every invented/realLike script looked the same because
- * AESTHETIC_STYLE_PRESETS is a static 2-entry table and the old hardcoded
- * jitter/hook/curve constants left almost no room for seeds to differ).
- * Bounds stay envelope-appropriate per cornerStyle so "invented" always
- * reads sharper/tighter and "realLike" always reads rounder/looser — only
- * the specific numbers within that envelope vary by seed.
+ * The small remainder of v1's GeometryProfile that still means something.
+ * `shapeBias` and `curveBulgeRange` are gone: which shapes a script uses is
+ * now ScriptArmature.attachments, and curve control points land on the
+ * shared anchor lattice rather than being offset by a free-floating bulge.
+ * `jitterSpread` is gone outright — per-endpoint jitter is the opposite of
+ * what the reference fonts do. `slant` moved onto ScriptStyle, since
+ * `sideBearing` is computed to pay for the horizontal extent it adds and the
+ * two must be derived from the same draw.
  */
 interface GeometryProfile {
-  jitterSpread: number;
-  /** -1..1, a consistent per-script lean applied to every line/curve endpoint so strokes share a "handwriting angle" instead of jittering independently. */
-  slant: number;
-  curveBulgeRange: [number, number];
   dotScale: number;
-  /**
-   * 0 = this script strongly favors geometric/discrete strokes (line, dot)
-   * wherever a manner's STROKE_FAMILY_BY_MANNER pool offers a choice; 1 =
-   * strongly favors flowing/cursive strokes (curve, hook). Every manner pool
-   * now includes at least one of each (see content.ts), so this one number
-   * sweeps the whole consonant inventory — the mechanism that makes two
-   * scripts of the same aesthetic read like distinct typefaces (one blocky,
-   * one cursive) rather than just reshuffled letterforms.
-   */
-  shapeBias: number;
+  /** How far a secondary anchor stop tends to sit from the primary one. Low = tight, repetitive letters; high = sprawling ones. */
+  stopSpread: number;
 }
 
-function buildGeometryProfile(
-  cornerStyle: ScriptStyle["cornerStyle"],
-  seedBase: number,
-  ancestorScript: AncestorScriptFamily | null,
-): GeometryProfile {
+function buildGeometryProfile(seedBase: number): GeometryProfile {
   const rng = new Rng(deriveSeed(seedBase, GEOMETRY_SALT));
-  const rounded = cornerStyle === "rounded";
-  const bias = ancestorScript ? ANCESTOR_SCRIPT_BIAS[ancestorScript] : null;
-  const jitterMultiplier = bias?.jitterMultiplier ?? 1;
-  const [shapeBiasMin, shapeBiasMax] = bias?.shapeBiasRange ?? [0, 1];
   return {
-    jitterSpread: Math.round(rng.int(rounded ? 5 : 6, rounded ? 12 : 16) * jitterMultiplier),
-    slant: rng.float() * 2 - 1,
-    curveBulgeRange: rounded ? [rng.int(8, 14), rng.int(16, 28)] : [rng.int(2, 6), rng.int(7, 14)],
-    dotScale: rng.float() * 0.6 + 0.8,
-    shapeBias: shapeBiasMin + rng.float() * (shapeBiasMax - shapeBiasMin),
+    dotScale: rng.float() * 0.4 + 0.6,
+    stopSpread: rng.float() * 0.5 + 0.35,
   };
 }
 
-const FLOWING_STROKE_KINDS = new Set<Stroke["kind"]>(["curve", "hook"]);
-
-/** Picks a stroke kind from an allowed pool, weighted by the script's shapeBias — a no-op when the pool has only one option (most manners still constrain to a fixed family; this only decides which member of a mixed family gets favored). */
-function pickStrokeKind(kinds: readonly Stroke["kind"][], geometry: GeometryProfile, rng: Rng): Stroke["kind"] {
-  if (kinds.length === 1) return kinds[0];
-  return rng.weightedPick(kinds, (kind) => (FLOWING_STROKE_KINDS.has(kind) ? geometry.shapeBias : 1 - geometry.shapeBias));
-}
-
 /**
- * Vowel height was previously computed (VOWEL_HEIGHT_Y) but never actually
- * consulted when placing a vowel's stroke — every vowel glyph drew across
- * the full x-height→baseline span regardless of height, so vowels sharing a
- * backness (most of them) rendered near-identically. This maps height onto
- * a real sub-band of the available vertical range; `height: null` (used by
- * consonants/concepts, which have no height feature) keeps the full band.
+ * A glyph's coordinate frame, expressed in the two numbers that actually
+ * matter: `stop` (which quantized anchor along the armature, 0..stops-1) and
+ * `across` (0 = on the armature line, 1 = the opposite rail or edge). Every
+ * stroke endpoint in a glyph is one of these, which is what holds a whole
+ * alphabet to the same rails.
  */
-function heightBand(height: VowelHeight | null, top: number, bottom: number): [number, number] {
-  if (height === null) return [top, bottom];
-  const span = bottom - top;
-  const center = top + VOWEL_HEIGHT_Y[height] * span;
-  const half = span * 0.22;
-  return [Math.max(top, center - half), Math.min(bottom, center + half)];
-}
-
-const GRID_COLS = 3;
-const GRID_ROWS = 4;
-const FOOTPRINT_HALF_WIDTH_FRACTION = 0.22;
-
-/**
- * A glyph's local anchor grid (3 columns x 4 rows) — every stroke endpoint
- * snaps to one of these points instead of landing at a continuously
- * jittered coordinate. This is the "text, not handwriting" fix: real
- * constructed scripts (and real typefaces generally) build every letter
- * from a small shared set of crisp aligned positions; they never wobble
- * each line segment independently the way the old per-endpoint jitter did.
- * `slant` shifts the whole grid's column once per script (buildLocalGrid's
- * one jitterSpread nudge) rather than per stroke, so a script can still
- * lean without any individual stroke looking shaky.
- */
-function buildLocalGrid(xBias: number, yBand: [number, number], style: ScriptStyle, geometry: GeometryProfile): Point[][] {
-  const [yTop, yBottom] = yBand;
-  const half = style.viewBoxSize * FOOTPRINT_HALF_WIDTH_FRACTION;
-  // Edge places (bilabial/glottal xBias 0/1) already sit near the margin
-  // boundary before jitter; slant*jitterSpread (up to ~19px, more for
-  // ancestorScript="arabic") can push centerX far enough that the grid's own
-  // footprint (±half) lands partially or fully outside the viewBox — a glyph
-  // that generates without error but renders invisible. Clamping here keeps
-  // the whole 3-column footprint on-canvas without squashing its spacing,
-  // rather than clamping each derived stroke coordinate independently.
-  const rawCenterX = gridX(xBias, style, geometry.slant * geometry.jitterSpread);
-  const centerX = clamp(rawCenterX, half, style.viewBoxSize - half);
-  const cols = [centerX - half, centerX, centerX + half];
-  const rows = Array.from({ length: GRID_ROWS }, (_, i) => yTop + ((yBottom - yTop) * i) / (GRID_ROWS - 1));
-  return rows.map((y) => cols.map((x) => ({ x, y })));
-}
-
-interface GridCursor {
-  row: number;
-  col: number;
-  point: Point;
-}
-
-const ORTHOGONAL_MOVE_CHANCE = 0.75;
-const MAX_TURN_ANGLE_DEGREES = 150;
-
-/** Unsigned angle (0-180°) between two direction vectors — 0 = continuing straight ahead, 180 = a complete reversal back over the incoming direction. */
-function turnAngleDegrees(incoming: Point, outgoing: Point): number {
-  const dot = incoming.x * outgoing.x + incoming.y * outgoing.y;
-  const cross = incoming.x * outgoing.y - incoming.y * outgoing.x;
-  return (Math.atan2(Math.abs(cross), dot) * 180) / Math.PI;
-}
-
-/**
- * Enumerates every other grid point, split into "orthogonal" (shares a row
- * or column with `exclude` — produces a clean vertical or horizontal
- * stroke) and "diagonal" (shares neither). Heavily biased toward
- * orthogonal: real constructed scripts build letters almost entirely from
- * verticals/horizontals meeting at corners, with diagonals used sparingly
- * as an accent, not as the dominant connector. Without this bias, uniform
- * random picking constantly draws corner-to-corner diagonals that cross
- * through the glyph — the reason grid-snapped strokes still read as
- * chaotic scribbles instead of clean blocky letters.
- *
- * `incomingDirection` (the direction the chain just traveled to reach
- * `exclude`, or null on the chain's first pick) rules out candidates that
- * would double back over that direction — bending at a corner (~90°) reads
- * as a letter; reversing hard back over the segment that just drew it
- * (~180°) reads as a scribble, and nothing here previously distinguished
- * the two. A tight corner can in principle filter out every candidate, so
- * this falls back to the single least-bad (smallest turn angle) point
- * rather than leaving the pool empty.
- *
- * `requireRow` restricts the whole candidate pool to one row — used when the
- * chain's final stroke must land on the baseline row (buildConnectedStrokes'
- * grounding guarantee). That requirement used to be applied by overriding
- * the row on an already-picked candidate *after* this function chose it,
- * which could silently undo the turn-angle filtering above (a turn-safe
- * candidate in one row is not necessarily turn-safe once relocated to
- * another). A single row is only 3 points, so it's meaningfully more likely
- * than the full grid to have none of them turn-safe; when that happens,
- * grounding loses to the no-reversal rule — this falls through to a normal,
- * full-grid turn-safe pick rather than forcing an over-threshold candidate
- * just to land on the baseline. Grounding is a strong bias (a multi-segment
- * random walk across 4 rows reaches the baseline naturally in the large
- * majority of chains anyway), not a guarantee worth scribbling for.
- */
-function pickGridPoint(grid: Point[][], rng: Rng, exclude: GridCursor, incomingDirection: Point | null, requireRow: number | null = null): GridCursor {
-  const candidatesInRows = (rows: number[]) => {
-    const all: Array<{ cursor: GridCursor; turn: number }> = [];
-    for (const row of rows) {
-      for (let col = 0; col < GRID_COLS; col++) {
-        if (row === exclude.row && col === exclude.col) continue;
-        const point = grid[row][col];
-        const turn = incomingDirection ? turnAngleDegrees(incomingDirection, { x: point.x - exclude.point.x, y: point.y - exclude.point.y }) : 0;
-        all.push({ cursor: { row, col, point }, turn });
-      }
-    }
-    return all;
-  };
-  const finish = (all: Array<{ cursor: GridCursor; turn: number }>) => {
-    const notReversing = incomingDirection ? all.filter((c) => c.turn <= MAX_TURN_ANGLE_DEGREES) : all;
-    const candidates = (notReversing.length > 0 ? notReversing : [all.reduce((best, c) => (c.turn < best.turn ? c : best))]).map((c) => c.cursor);
-    const orthogonal = candidates.filter((c) => c.row === exclude.row || c.col === exclude.col);
-    const diagonal = candidates.filter((c) => c.row !== exclude.row && c.col !== exclude.col);
-    const pool = orthogonal.length > 0 && rng.chance(ORTHOGONAL_MOVE_CHANCE) ? orthogonal : diagonal;
-    return rng.pick(pool.length > 0 ? pool : orthogonal.length > 0 ? orthogonal : candidates);
-  };
-
-  if (requireRow !== null) {
-    const restricted = candidatesInRows([requireRow]);
-    if (!incomingDirection || restricted.some((c) => c.turn <= MAX_TURN_ANGLE_DEGREES)) return finish(restricted);
-  }
-  return finish(candidatesInRows(Array.from({ length: GRID_ROWS }, (_, r) => r)));
-}
-
-const CLOSURE_CHANCE = 0.3;
-
-/**
- * Builds `count` strokes that read as ONE constructed glyph, grid-snapped
- * (buildLocalGrid) rather than freely jittered. Two extra rules make it
- * read as text rather than a doodle: the chain always touches the bottom
- * grid row (the shared baseline every letter in a real typeface sits on)
- * at least once, and — once grounded — the final stroke sometimes targets
- * the glyph's own starting point instead of a fresh one, closing the shape
- * into a box/loop/triangle the way real constructed scripts constantly do
- * and the old free-form chain could never produce.
- */
-interface ConnectedStrokes {
+interface ArmatureFrame {
+  /** Drawn identically in every glyph of the script. */
   strokes: Stroke[];
-  /** The chain's own first point — literally `strokes[0]`'s from/anchor/center. Callers anchor near-top decorative marks here so they share a real coordinate with the chain instead of an independently computed one. */
-  start: Point;
-  /** The chain's own last point — literally the final stroke's to/center. Callers anchor near-bottom decorative marks here, and buildSyllableStrokes bridges from this point to the following vowel's own `start`. */
-  end: Point;
+  stops: number;
+  point: (stop: number, across: number) => Point;
+  /** Whether `strokes` already spans cap→base rail on its own. */
+  spansRails: boolean;
+  /** Whether `strokes` already spans the glyph's full width on its own. */
+  spansWidth: boolean;
+  /** True when attachments may take a negative `across` to reach the other side (spine armatures only). */
+  twoSided: boolean;
 }
 
-function buildConnectedStrokes(
-  kinds: readonly Stroke["kind"][],
-  count: number,
-  xBias: number,
-  yBand: [number, number],
-  style: ScriptStyle,
-  geometry: GeometryProfile,
-  rng: Rng,
-): ConnectedStrokes {
-  const grid = buildLocalGrid(xBias, yBand, style, geometry);
-  const startCol = geometry.slant < -0.33 ? 0 : geometry.slant > 0.33 ? GRID_COLS - 1 : 1;
-  const start: GridCursor = { row: 0, col: startCol, point: grid[0][startCol] };
+function buildArmatureFrame(style: ScriptStyle): ArmatureFrame {
+  const { viewBoxSize, xHeightY: top, baselineY: bottom, sideBearing, armature, slant } = style;
+  const railHeight = bottom - top;
+  const shearAtTop = railHeight * slant;
+  // Anchor the shear at the baseline (shift 0 there) and let it grow toward
+  // the cap rail, then push the whole frame right by whichever end the lean
+  // moved leftward, so the ink lands inside [sideBearing, viewBoxSize - …]
+  // regardless of lean direction.
+  const left = sideBearing - Math.min(0, shearAtTop);
+  const right = viewBoxSize - sideBearing - Math.max(0, shearAtTop);
+  const centerX = (left + right) / 2;
+  const shear = (y: number) => (bottom - y) * slant;
 
-  let cursor = start;
-  let prevPoint: Point | null = null;
-  let grounded = false;
-  const strokes: Stroke[] = [];
+  const stops = armature.anchorStops;
+  const line = (from: Point, to: Point): Stroke => ({ kind: "line", from, to });
+  const at = (x: number, y: number): Point => ({ x: x + shear(y), y });
+  /**
+   * A straight armature run emitted as one segment per anchor stop rather
+   * than a single long line. The segments are collinear and share endpoints,
+   * so they still merge into one subpath and render identically — but it
+   * leaves the pen able to stop at any anchor, which is what lets
+   * chainStrokes splice an attachment in mid-run instead of starting a new
+   * contour for it. Reference fonts hold 1.1-2.2 contours per glyph; an
+   * unsegmented armature costs a whole extra contour per attachment.
+   */
+  const run = (from: Point, to: Point): Stroke[] =>
+    Array.from({ length: stops - 1 }, (_, i) =>
+      line(
+        { x: from.x + ((to.x - from.x) * i) / (stops - 1), y: from.y + ((to.y - from.y) * i) / (stops - 1) },
+        { x: from.x + ((to.x - from.x) * (i + 1)) / (stops - 1), y: from.y + ((to.y - from.y) * (i + 1)) / (stops - 1) },
+      ),
+    );
 
-  for (let i = 0; i < count; i++) {
-    // The first stroke establishes the chain's own movement away from
-    // `start` — a "dot" kind doesn't move the cursor (see below), so picking
-    // it here would leave start/end at the identical unmoved point. For a
-    // count===1 chain that's the glyph's ENTIRE skeleton: nothing but
-    // overlapping same-point dots and zero lines/curves/hooks. Excluding
-    // "dot" from the pool only for i===0 keeps every family's other members
-    // available (no manner pool is dot-only) while guaranteeing the chain
-    // always draws a real, moving skeleton stroke.
-    //
-    // Restricted to the chain's LAST position otherwise (not "any i>0"): a
-    // dot is the one stroke kind render.ts's glyphToSvgPath can never merge
-    // into the surrounding subpath (it's a closed loop, always its own SVG
-    // "M"), so allowing it at every interior position too could stack up
-    // several extra subpaths in a single chain — at most one per chain now,
-    // same "one decorative addition" budget as the mark appended after the
-    // chain.
-    const isFinal = i === count - 1;
-    const skeletonKinds = i === 0 || !isFinal ? kinds.filter((kind) => kind !== "dot") : kinds;
-    const kind = pickStrokeKind(skeletonKinds.length > 0 ? skeletonKinds : kinds, geometry, rng);
-    const wantsToClose = isFinal && i > 0 && grounded && rng.chance(CLOSURE_CHANCE);
+  const vertical = (axisX: number, oppositeX: number) => (stop: number, across: number): Point => {
+    const y = top + (railHeight * stop) / (stops - 1);
+    return at(axisX + across * (oppositeX - axisX), y);
+  };
+  const horizontal = (axisY: number, oppositeY: number) => (stop: number, across: number): Point => {
+    const x = left + ((right - left) * stop) / (stops - 1);
+    const y = axisY + across * (oppositeY - axisY);
+    return at(x, y);
+  };
 
-    // A dot has one coordinate, not a span — it decorates the pen's current
-    // position rather than moving to a freshly picked point. Advancing it to
-    // an unrelated grid point (like line/curve/hook do) would silently
-    // "teleport" it with nothing drawn in between, reproducing the exact
-    // disconnected-mark bug this function exists to prevent.
-    const incomingDirection = prevPoint ? { x: cursor.point.x - prevPoint.x, y: cursor.point.y - prevPoint.y } : null;
-    // Closing bypasses pickGridPoint's own turn filter (it targets `start`
-    // directly, not a filtered candidate), so a chain that closes after only
-    // one prior segment would otherwise always retrace that segment exactly
-    // backwards — a degenerate "line drawn twice," the same scribble pattern
-    // this whole mechanism exists to rule out. Same threshold, checked here
-    // instead: if closing would reverse too sharply, fall through to a normal
-    // (turn-safe) pick rather than closing.
-    //
-    // A random walk can also land back on `start` on its own before the
-    // final stroke — closing onto it then would be a ZERO-length move.
-    // atan2(0,0) reads as "0° turn" (harmlessly passes the check above) but
-    // length gets floored to 4 for line/curve/hook alike, fabricating a
-    // phantom stroke pointing in an arbitrary default direction out of
-    // nothing — which then reads as a real reversal against whatever came
-    // before. Closing only makes sense when there's real distance to close.
-    const closeVector = { x: start.point.x - cursor.point.x, y: start.point.y - cursor.point.y };
-    const closingHasDistance = closeVector.x !== 0 || closeVector.y !== 0;
-    const closing = wantsToClose && closingHasDistance && (!incomingDirection || turnAngleDegrees(incomingDirection, closeVector) <= MAX_TURN_ANGLE_DEGREES);
-    const mustGround = isFinal && !grounded && kind !== "dot";
-    let target = closing ? start : kind === "dot" ? cursor : pickGridPoint(grid, rng, cursor, incomingDirection, mustGround ? GRID_ROWS - 1 : null);
-    if (target.row === GRID_ROWS - 1) grounded = true;
-
-    const from = cursor.point;
-    const to = target.point;
-    let stroke: Stroke;
-    switch (kind) {
-      case "line":
-        stroke = { kind: "line", from, to };
-        break;
-      case "curve": {
-        const [bulgeMin, bulgeMax] = geometry.curveBulgeRange;
-        const bulge = rng.int(bulgeMin, bulgeMax) * (rng.chance(0.5) ? 1 : -1);
-        stroke = { kind: "curve", from, control: { x: (from.x + to.x) / 2 + bulge, y: (from.y + to.y) / 2 }, to };
-        break;
-      }
-      case "dot":
-        stroke = { kind: "dot", center: to, radius: style.strokeWidth * geometry.dotScale };
-        break;
-      case "hook": {
-        const dx = to.x - from.x;
-        const dy = to.y - from.y;
-        const [curvMin, curvMax] = geometry.curveBulgeRange;
-        stroke = {
-          kind: "hook",
-          anchor: from,
-          angle: (Math.atan2(dy, dx) * 180) / Math.PI,
-          length: Math.max(4, Math.hypot(dx, dy)),
-          curvature: rng.int(curvMin, curvMax) * (rng.chance(0.5) ? 1 : -1),
-        };
-        break;
-      }
+  switch (armature.kind) {
+    case "stemLeft": {
+      const point = vertical(left, right);
+      return { strokes: run(at(left, top), at(left, bottom)), stops, point, spansRails: true, spansWidth: false, twoSided: false };
     }
-    strokes.push(stroke);
-    // A "dot" doesn't move the cursor (from === to), so it carries no real
-    // direction of its own — leave prevPoint alone rather than collapsing
-    // the incoming direction to a zero vector for whatever comes next.
-    if (kind !== "dot") prevPoint = from;
-    cursor = target;
+    case "stemRight": {
+      const point = vertical(right, left);
+      return { strokes: run(at(right, top), at(right, bottom)), stops, point, spansRails: true, spansWidth: false, twoSided: false };
+    }
+    case "spine": {
+      const point = vertical(centerX, right);
+      return { strokes: run(at(centerX, top), at(centerX, bottom)), stops, point, spansRails: true, spansWidth: false, twoSided: true };
+    }
+    case "frame": {
+      const point = vertical(left, right);
+      // Perimeter walked so it ends on the anchor-bearing left edge, which is
+      // segmented per stop like any other run — the other three sides carry
+      // no anchors, so they stay whole.
+      return {
+        strokes: [
+          line(at(left, top), at(right, top)),
+          line(at(right, top), at(right, bottom)),
+          line(at(right, bottom), at(left, bottom)),
+          ...run(at(left, bottom), at(left, top)),
+        ],
+        stops,
+        point,
+        spansRails: true,
+        spansWidth: true,
+        twoSided: false,
+      };
+    }
+    case "headline": {
+      const point = horizontal(top, bottom);
+      return { strokes: run(at(left, top), at(right, top)), stops, point, spansRails: false, spansWidth: true, twoSided: false };
+    }
+    case "baseRule": {
+      const point = horizontal(bottom, top);
+      return { strokes: run(at(left, bottom), at(right, bottom)), stops, point, spansRails: false, spansWidth: true, twoSided: false };
+    }
+    case "none": {
+      const point = vertical(left, right);
+      return { strokes: [], stops, point, spansRails: false, spansWidth: false, twoSided: false };
+    }
   }
-  return { strokes, start: start.point, end: cursor.point };
 }
 
-/** Overflow phonemes (diacriticStacking strategy) get one guaranteed extra mark layered on their otherwise-normal glyph, flagging them as the "added-on" tier. Placed exactly at the chain's own `start` (not an independent gridX/baselineY coordinate) so it shares a literal coordinate with the main letterform instead of floating disconnected from it. */
-function buildOverflowMark(anchor: Point, style: ScriptStyle): Stroke {
-  return { kind: "dot", center: anchor, radius: style.strokeWidth * 0.6 };
+// --- Attachments (what one glyph hangs off the shared armature) ---
+
+/** Whether an attachment reaches all the way to the far rail/edge. At least one per glyph must, or the glyph collapses to a bare armature plus a nub and falls out of the reference aspect band. */
+function reachesFarSide(kind: AttachmentKind): boolean {
+  return kind === "arm" || kind === "crossbar" || kind === "curl" || kind === "bowl";
+}
+
+/**
+ * Whether an attachment actually travels between its two anchor stops.
+ * `crossbar` and `pip` read only `stopA` — which is fine hanging off an
+ * armature that already spans the rails, but on a `none` armature (no
+ * armature stroke at all) it makes the whole glyph a single mark at one
+ * stop: zero height, and an aspect ratio that runs off to infinity.
+ */
+function spansStops(kind: AttachmentKind): boolean {
+  return kind === "arm" || kind === "curl" || kind === "bowl" || kind === "flag";
+}
+
+/** The kinds that can carry a glyph's structural guarantee, in preference order, given what its armature leaves unestablished. */
+function loadBearingKinds(armatureKind: ArmatureKind): AttachmentKind[] {
+  const spanning: AttachmentKind[] = ["arm", "curl", "bowl"];
+  return armatureKind === "none" ? spanning : ["crossbar", ...spanning];
+}
+
+function buildAttachment(kind: AttachmentKind, frame: ArmatureFrame, stopA: number, stopB: number, side: number, style: ScriptStyle, geometry: GeometryProfile): Stroke[] {
+  const p = (stop: number, across: number) => frame.point(stop, across * side);
+  switch (kind) {
+    case "arm":
+      return [{ kind: "line", from: p(stopA, 0), to: p(stopB, 1) }];
+    case "crossbar":
+      return [{ kind: "line", from: p(stopA, 0), to: p(stopA, 1) }];
+    case "flag":
+      return [{ kind: "line", from: p(stopA, 0), to: p(stopB, 0.5) }];
+    case "curl":
+      return [{ kind: "curve", from: p(stopA, 0), control: p(stopA, 1), to: p(stopB, 1) }];
+    case "bowl": {
+      // Two connected quadratics rather than one — a single quadratic only
+      // reaches halfway to its control point, so a one-segment "bowl" would
+      // top out at across≈0.5 and leave the glyph too narrow. Split at the
+      // midpoint so the curve genuinely touches the far side, and because
+      // seg1.to === seg2.from, render.ts merges them into one subpath.
+      const mid = (stopA + stopB) / 2;
+      return [
+        { kind: "curve", from: p(stopA, 0), control: p(stopA, 1), to: p(mid, 1) },
+        { kind: "curve", from: p(mid, 1), control: p(stopB, 1), to: p(stopB, 0) },
+      ];
+    }
+    case "pip":
+      // Halfway across rather than on the armature line: a dot sitting
+      // directly on the stem just reads as a lump on it, not as a mark.
+      return [{ kind: "dot", center: p(stopA, 0.5), radius: style.strokeWidth * geometry.dotScale }];
+  }
+}
+
+/**
+ * Picks the attachment a feature maps to, honoring both invariants that
+ * matter: within one script the same feature always draws the same shape,
+ * and a script only ever uses shapes from its own narrow vocabulary. Takes
+ * the first preference the script actually owns; when a feature's whole
+ * preference list falls outside the vocabulary, falls back to a
+ * deterministic hash into the vocabulary rather than an arbitrary default,
+ * so distinct features still land on distinct shapes where the pool allows.
+ */
+function resolveAttachment(preference: readonly AttachmentKind[], vocabulary: AttachmentKind[], featureKey: string): AttachmentKind {
+  const owned = preference.find((kind) => vocabulary.includes(kind));
+  return owned ?? vocabulary[hashString(featureKey) % vocabulary.length];
+}
+
+/**
+ * Reorders a glyph's strokes so consecutive ones share endpoints wherever
+ * the geometry allows, which is what lets render.ts's glyphToSvgPath merge
+ * them into a single SVG subpath. Purely an ordering concern — every stroke
+ * is painted with the same stroke, so drawing order and direction are
+ * visually irrelevant, but contour count is not: the reference fonts sit at
+ * 1.1-2.2 contours per glyph, and emitting an armature and its attachments
+ * in construction order lands closer to 3 even when every one of them
+ * physically touches its neighbour.
+ *
+ * Dots are pulled to the end and never chained: render.ts always gives a dot
+ * its own "M" (it's a closed loop, not something a line can continue into),
+ * so leaving one mid-sequence would break the chain on both sides of it.
+ */
+function chainStrokes(strokes: Stroke[]): Stroke[] {
+  const endpointsOf = (s: Stroke): [Point, Point] | null =>
+    s.kind === "line" || s.kind === "curve" ? [s.from, s.to] : null;
+  const reverse = (s: Stroke): Stroke =>
+    s.kind === "line" ? { ...s, from: s.to, to: s.from } : s.kind === "curve" ? { ...s, from: s.to, to: s.from } : s;
+  const same = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y) < 0.001;
+
+  const dots = strokes.filter((s) => s.kind === "dot");
+  const pending = strokes.filter((s) => s.kind !== "dot");
+  if (pending.length === 0) return dots;
+
+  const ordered: Stroke[] = [pending.shift() as Stroke];
+  let pen = (endpointsOf(ordered[0]) as [Point, Point])[1];
+  while (pending.length > 0) {
+    let index = pending.findIndex((s) => same((endpointsOf(s) as [Point, Point])[0], pen));
+    let flip = false;
+    if (index === -1) {
+      index = pending.findIndex((s) => same((endpointsOf(s) as [Point, Point])[1], pen));
+      flip = index !== -1;
+    }
+    if (index === -1) index = 0;
+    const next = flip ? reverse(pending[index]) : pending[index];
+    pending.splice(index, 1);
+    ordered.push(next);
+    pen = (endpointsOf(next) as [Point, Point])[1];
+  }
+  return [...ordered, ...dots];
+}
+
+/** One feature's contribution to a glyph: where along the armature it sits and what shape it reaches for. */
+interface AttachmentSpec {
+  /** 0..1 along the armature — which anchor stop this attachment hangs from. */
+  position: number;
+  preference: readonly AttachmentKind[];
+  /** Distinguishes features whose preference list misses the script vocabulary entirely. */
+  featureKey: string;
+}
+
+interface GlyphSpec extends AttachmentSpec {
+  /**
+   * A second feature-determined attachment rather than a seeded one — used
+   * by syllabic glyphs, where the vowel is as much a part of the sign as the
+   * consonant and can't be left to the rng the way a decorative second
+   * attachment can.
+   */
+  secondary?: AttachmentSpec;
+  /** A small interior mark for a salient binary feature (voicing, rounding, secondary articulation, overflow tier). */
+  mark: { position: number } | null;
+  /**
+   * Overrides ScriptStyle.attachmentCountRange for glyph kinds that need a
+   * bigger shape space than an alphabet does. A phoneme inventory asks for
+   * ~20-30 distinct forms, which 1-2 attachments on a 5-7 stop lattice
+   * supplies comfortably; a syllabary asks for ~140 and a logography for
+   * ~500, which it does not — measured 25-33% of those sets colliding onto
+   * shapes already taken. Real logographies answer this the same way, by
+   * compounding several components into one sign.
+   */
+  attachmentBudget?: [number, number];
+}
+
+/**
+ * The one place a glyph gets built. Every glyph in a script shares
+ * `frame.strokes` verbatim and differs only in which attachments hang off
+ * which anchor stops — the inversion of v1, where each glyph was an
+ * independent random walk and the only thing shared was a stroke-kind pool.
+ */
+function buildGlyphStrokes(spec: GlyphSpec, style: ScriptStyle, geometry: GeometryProfile, rng: Rng): Stroke[] {
+  const frame = buildArmatureFrame(style);
+  const vocabulary = style.armature.attachments;
+  const lastStop = frame.stops - 1;
+
+  const stopFor = (position: number) => Math.round(clamp(position, 0, 1) * lastStop);
+  const primaryStop = stopFor(spec.position);
+  // The partner stop is what gives a glyph a second degree of freedom
+  // beyond its place-derived primary stop, so the range it can span sets a
+  // hard ceiling on how many distinct letters a script can have. A ±1 step
+  // offers two partners; against a 27-consonant inventory mapped onto 4-6
+  // stops that collapses most of the alphabet onto identical forms. Floored
+  // at 2 so even the tightest script keeps four distinct partners, and
+  // `stopSpread` still sets a script's character (compact vs sprawling)
+  // above that floor. `rng` is seeded from the glyph's own id (see
+  // resolveGlyphs), so this is stable per phoneme — distinctness, not noise.
+  const maxSpread = clamp(Math.round(geometry.stopSpread * lastStop) + 1, 2, Math.max(2, lastStop));
+  const spread = rng.int(1, maxSpread) * (rng.chance(0.5) ? 1 : -1);
+  /**
+   * Every two-point attachment needs its endpoints on genuinely different
+   * stops. Clamping a ±spread offset into range collapses it back onto the
+   * primary whenever the primary is already at a rail — and a `bowl` or
+   * `curl` whose endpoints coincide degenerates into a fold-back squiggle,
+   * which is exactly the scribble artifact this whole patch exists to
+   * remove. Prefer whichever direction has room; only fall back to a
+   * single-step nudge if neither does.
+   */
+  const separated = (from: number, offset: number): number => {
+    const preferred = from + offset <= lastStop && from + offset >= 0 ? offset : -offset;
+    const candidate = clamp(from + preferred, 0, lastStop);
+    if (candidate !== from) return candidate;
+    return from < lastStop ? from + 1 : from - 1;
+  };
+  const partnerStop = separated(primaryStop, spread);
+
+  // A syllabic glyph's second attachment is the vowel — feature-determined,
+  // not a seeded flourish — so it is placed before the optional decorative
+  // one is even considered, and the decorative one is skipped entirely.
+  const placed: Array<{ kind: AttachmentKind; a: number; b: number }> = [];
+  // A glyph carrying a feature mark can't also have a bare `pip` as its
+  // primary: the letter would be two loose dots and an armature, with
+  // nothing to say which dot is the meaningful one.
+  const primaryPool = spec.mark && vocabulary.length > 1 ? vocabulary.filter((k) => k !== "pip") : vocabulary;
+  const primaryKind = resolveAttachment(spec.preference, primaryPool, spec.featureKey);
+  placed.push({ kind: primaryKind, a: primaryStop, b: partnerStop });
+
+  if (spec.secondary) {
+    const stop = stopFor(spec.secondary.position);
+    placed.push({
+      kind: resolveAttachment(spec.secondary.preference, vocabulary, spec.secondary.featureKey),
+      a: stop,
+      b: stop === primaryStop ? separated(stop, spread) : primaryStop,
+    });
+  }
+
+  {
+    const [countMin, countMax] = spec.attachmentBudget ?? style.attachmentCountRange;
+    // A glyph that already carries a feature mark excludes `pip` here: two
+    // unconnected dots in one letter read as an accident rather than as two
+    // deliberate marks, and the feature mark is the one carrying meaning.
+    const available = vocabulary.filter((k) => k !== primaryKind && !(spec.mark && k === "pip"));
+    // A `spine` sits at the glyph's centre, so `across` only ever reaches
+    // half the footprint from it — a spine glyph with a single one-sided
+    // attachment covers half the width the side bearing was budgeted for and
+    // renders far too narrow. The opposite-side attachment is structural
+    // there, not decorative, so it isn't left to the count roll.
+    // A primary that ignores its partner stop (`crossbar`, `pip`) leaves the
+    // glyph with a single degree of freedom — its one anchor position — so
+    // an alphabet of 27 consonants collapses onto the 4-6 available stops
+    // and most letters come out identical but for their feature mark. A
+    // second attachment restores the (stopA, stopB) pair and with it enough
+    // distinct forms to actually spell with.
+    // `none` pins its structural attachment to the full stop range in every
+    // glyph of the script (it is standing in for the missing armature), so
+    // the second attachment is the only thing that can tell its letters
+    // apart at all.
+    const wantsMore = frame.twoSided || style.armature.kind === "none" || !spansStops(primaryKind) || rng.int(countMin, countMax) > placed.length;
+    // On a spine that second attachment is load-bearing for the glyph's
+    // width, so it has to be one of the kinds that actually reaches the
+    // edge — a `flag` stops halfway and leaves the glyph a quarter narrower
+    // than the side bearing budgeted for.
+    const eligible = frame.twoSided ? available.filter((k) => reachesFarSide(k)) : available;
+    // Falling back to the primary's own kind — at a different anchor stop —
+    // rather than to nothing. The vocabulary can legitimately run dry here
+    // (two kinds, one taken by the primary, `pip` filtered out by a feature
+    // mark), and a repeated shape at a second position is an ordinary
+    // letterform, whereas skipping the attachment leaves the glyph with a
+    // single degree of freedom and duplicates elsewhere in the alphabet. On
+    // a two-sided armature it additionally keeps both flanks full width.
+    const pool = eligible.length > 0 ? eligible : [primaryKind];
+    // Each extra attachment draws its own stop pair rather than reusing the
+    // primary's reversed: (partner, primary) makes it fully determined by the
+    // first attachment, so it adds no distinguishing power at all — two
+    // phonemes that collided on the primary still collide on the whole glyph.
+    // A budget above 2 compounds further components onto the same armature,
+    // which is how the syllabic and logographic sets reach the hundreds of
+    // distinct signs they need. Counted against what is already placed, so a
+    // syllable's feature-driven vowel attachment fills part of the budget
+    // rather than being additional to it.
+    const extras = wantsMore ? Math.max(1, countMax - placed.length) : 0;
+    for (let i = 0; i < extras && pool.length > 0; i++) {
+      const anchor = i === 0 ? partnerStop : rng.int(0, lastStop);
+      placed.push({ kind: rng.pick(pool), a: anchor, b: separated(anchor, rng.int(1, maxSpread) * (rng.chance(0.5) ? 1 : -1)) });
+    }
+  }
+
+  // Whatever the armature doesn't establish on its own, an attachment has
+  // to. A `frame` already covers both rails and full width, so it can carry
+  // nothing but a `pip` and still be a legitimate letter; a bare stem plus a
+  // pip is a line with a dot beside it, well outside the reference aspect
+  // band. The promoted kind is drawn from the script's own vocabulary where
+  // possible, so the guarantee doesn't smuggle in a shape the rest of the
+  // alphabet never uses.
+  const armatureKind = style.armature.kind;
+  const loadBearing = loadBearingKinds(armatureKind);
+  const carriesStructure = (kind: AttachmentKind) => reachesFarSide(kind) && (armatureKind !== "none" || spansStops(kind));
+  // On a two-sided armature each side is only half the footprint, so it is
+  // not enough for *some* attachment to reach the edge — the primary has to
+  // as well, or the glyph comes out three-quarters width with one stunted
+  // flank.
+  const primaryMustCarry = frame.twoSided ? !carriesStructure(placed[0].kind) : !placed.some((p) => carriesStructure(p.kind));
+  if (!(frame.spansRails && frame.spansWidth) && primaryMustCarry) {
+    placed[0].kind = loadBearing.find((k) => vocabulary.includes(k)) ?? loadBearing[0];
+  }
+  // `none` draws no armature at all, so whichever attachment carries the
+  // structure is the only thing reaching either rail — it has to run the
+  // full stop range, and is in effect that script's armature: identical in
+  // every glyph, which is exactly what holds the set together. All of the
+  // distinguishing work therefore falls on the second attachment, which is
+  // why `wantsSecond` forces one here.
+  if (armatureKind === "none") {
+    const structural = placed.find((p) => carriesStructure(p.kind)) ?? placed[0];
+    structural.a = 0;
+    structural.b = lastStop;
+  }
+
+  const strokes: Stroke[] = [...frame.strokes];
+  placed.forEach(({ kind, a, b }, i) => {
+    const side = frame.twoSided && i > 0 ? -1 : 1;
+    strokes.push(...buildAttachment(kind, frame, a, b, side, style, geometry));
+  });
+
+  if (spec.mark) {
+    // Half a stop off the lattice and halfway across, so the mark floats in
+    // the glyph's counter instead of being swallowed by the armature line it
+    // would otherwise sit on. Inside both rails by construction, so it never
+    // disturbs the script's rail alignment.
+    const markStop = clamp(spec.mark.position * lastStop + 0.5, 0, lastStop);
+    strokes.push({ kind: "dot", center: frame.point(markStop, 0.5), radius: style.strokeWidth * geometry.dotScale * 0.8 });
+  }
+
+  return clampStrokes(chainStrokes(strokes), style.viewBoxSize);
+}
+
+// --- Shared numeric helpers ---
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
 }
 
 function clampPoint(point: Point, size: number): Point {
@@ -425,13 +608,15 @@ function clampPoint(point: Point, size: number): Point {
 }
 
 /**
- * Defensive net for Bug B's off-canvas failure mode: buildLocalGrid's own
- * centerX clamp keeps the shared grid on-canvas, but a mark anchored off a
- * grid point with its own independent offset (the voiced dot's +8/-6, the
- * manner radical's outward extension, a curve's bulge) can still stray past
- * the viewBox edge on its own. Clamps every coordinate field a Stroke
- * actually stores — a hook's far end isn't a stored field (only its anchor
- * is), so there's nothing further to clamp there.
+ * Defensive net against a stroke straying off-canvas. buildScriptStyle's
+ * `sideBearing` already budgets for the ink width plus the shear, so nothing
+ * an armature or attachment draws should reach the edge on its own — but a
+ * `dot`'s radius and a curve's control point are the two coordinates not
+ * covered by that budget, and a clamp here is cheaper than a proof. Clamps
+ * every coordinate field a Stroke actually stores; a `hook`'s far end isn't
+ * a stored field (only its anchor is), so there's nothing further to clamp
+ * there. `hook` is no longer generated at all as of v2 — the case stays for
+ * pre-v2 stored glyphs read back through clampStrokes.
  */
 function clampStroke(stroke: Stroke, size: number): Stroke {
   switch (stroke.kind) {
@@ -450,102 +635,102 @@ function clampStrokes(strokes: Stroke[], size: number): Stroke[] {
   return strokes.map((stroke) => clampStroke(stroke, size));
 }
 
-/** `chainStart`/`chainEnd` are the connected chain's own anchors, unaffected by whichever mark (if any) got appended after it — buildSyllableStrokes uses these to bridge a consonant+vowel pair into one visually connected syllable glyph, since a mark's own anchor isn't a reliable stand-in (a hook's far end, e.g., isn't a stored coordinate). */
-interface ConsonantStrokeSet {
-  strokes: Stroke[];
-  chainStart: Point;
-  chainEnd: Point;
+// --- Per-category glyph builders ---
+
+/**
+ * At most one mark per glyph, by priority: secondary articulation and
+ * voicing are the phonologically salient contrasts so they win, and
+ * overflow — the "added-on tier" signal — is next. The reference fonts'
+ * dominant pattern is a bare skeleton with NO mark at all in the common
+ * case, so a plain voiceless consonant gets nothing.
+ */
+function consonantMark(phoneme: ConsonantPhoneme, markOverflow: boolean): GlyphSpec["mark"] {
+  if (phoneme.features.secondary) return { position: SECONDARY_MARK_POSITION[phoneme.features.secondary] };
+  if (phoneme.features.voiced) return { position: 0.5 };
+  return markOverflow ? { position: 1 } : null;
 }
 
-function buildConsonantStrokes(
-  phoneme: ConsonantPhoneme,
-  style: ScriptStyle,
-  geometry: GeometryProfile,
-  rng: Rng,
-  markOverflow = false,
-): ConsonantStrokeSet {
-  const family = STROKE_FAMILY_BY_MANNER[phoneme.features.manner];
-  const xBias = ORIENTATION_BY_PLACE[phoneme.features.place];
-  const yBand: [number, number] = [style.xHeightY, style.baselineY];
-  const [minStrokes, maxStrokes] = style.strokeCountRange;
-  const { strokes, start, end } = buildConnectedStrokes(family, rng.int(minStrokes, maxStrokes), xBias, yBand, style, geometry, rng);
-  // Reference constructed-script fonts average ~1.4 contours/glyph — most
-  // letters are ONE confident stroke, with an accent the exception rather
-  // than the rule. Stacking every applicable mark (manner radical + voiced
-  // dot + secondary hook + overflow mark, unconditionally/independently)
-  // guaranteed 4 separate touching-but-distinct subpaths on a voiced-
-  // secondary consonant, busier than every reference font but the two
-  // outliers. At most one mark per glyph now, picked by priority: secondary
-  // articulation and voicing are the phonologically salient features
-  // (secondary changes the whole consonant's articulation; voicing is a core
-  // contrast), so they win; overflow — the "added-on tier" signal — is next.
-  // The old unconditional manner radical is dropped entirely rather than
-  // demoted to a fallback: manner is already statistically encoded via
-  // STROKE_FAMILY_BY_MANNER's shape-family selection, and a guaranteed mark
-  // on every "plain" consonant (no secondary/voicing/overflow) would keep
-  // every glyph decorated — the reference fonts' dominant pattern is a bare
-  // skeleton with NO mark at all for the common case.
-  if (phoneme.features.secondary) {
-    const angle = SECONDARY_MARK_ANGLE[phoneme.features.secondary];
-    strokes.push({ kind: "hook", anchor: start, angle, length: 8, curvature: 10 });
-  } else if (phoneme.features.voiced) {
-    // Anchored exactly at `start` (not an independent offset point): with
-    // the manner radical gone, voicing can now be a glyph's ONLY extra mark,
-    // so — like every other mark here — it must itself land on a literal
-    // chain coordinate to satisfy the connectivity contract, rather than
-    // relying on a guaranteed second mark to supply that connection.
-    strokes.push({ kind: "dot", center: start, radius: style.strokeWidth });
-  } else if (markOverflow) {
-    strokes.push(buildOverflowMark(start, style));
-  }
-  return { strokes: clampStrokes(strokes, style.viewBoxSize), chainStart: clampPoint(start, style.viewBoxSize), chainEnd: clampPoint(end, style.viewBoxSize) };
+function buildConsonantStrokes(phoneme: ConsonantPhoneme, style: ScriptStyle, geometry: GeometryProfile, rng: Rng, markOverflow = false): Stroke[] {
+  return buildGlyphStrokes(
+    {
+      position: ORIENTATION_BY_PLACE[phoneme.features.place],
+      preference: ATTACHMENT_BY_MANNER[phoneme.features.manner],
+      featureKey: `manner:${phoneme.features.manner}`,
+      mark: consonantMark(phoneme, markOverflow),
+    },
+    style,
+    geometry,
+    rng,
+  );
 }
 
-interface VowelStrokeSet {
-  strokes: Stroke[];
-  chainStart: Point;
-  chainEnd: Point;
+/**
+ * Vowel height picks the anchor stop and backness the attachment shape, so
+ * the two features that distinguish vowels from each other are the two that
+ * vary the glyph — v1 computed VOWEL_HEIGHT_Y and then placed every vowel
+ * across the same band anyway, so vowels sharing a backness rendered
+ * near-identically.
+ */
+function buildVowelStrokes(phoneme: VowelPhoneme, style: ScriptStyle, geometry: GeometryProfile, rng: Rng, markOverflow = false): Stroke[] {
+  const backness = VOWEL_BACKNESS_X[phoneme.features.backness];
+  const preference = backness < 0.5 ? VOWEL_ATTACHMENT_PREFERENCE : [...VOWEL_ATTACHMENT_PREFERENCE].reverse();
+  return buildGlyphStrokes(
+    {
+      position: VOWEL_HEIGHT_Y[phoneme.features.height],
+      preference,
+      featureKey: `backness:${phoneme.features.backness}`,
+      mark: phoneme.features.rounded ? { position: 0.5 } : markOverflow ? { position: 1 } : null,
+    },
+    style,
+    geometry,
+    rng,
+  );
 }
 
-function buildVowelStrokes(
-  phoneme: VowelPhoneme,
-  style: ScriptStyle,
-  geometry: GeometryProfile,
-  rng: Rng,
-  markOverflow = false,
-): VowelStrokeSet {
-  const xBias = VOWEL_BACKNESS_X[phoneme.features.backness];
-  const yBand = heightBand(phoneme.features.height, style.xHeightY, style.baselineY);
-  const count = Math.max(1, style.strokeCountRange[0] - 1);
-  const { strokes, start, end } = buildConnectedStrokes(VOWEL_STROKE_KINDS, count, xBias, yBand, style, geometry, rng);
-  // Anchored exactly at `end` (epsilon 0): unlike consonants, vowels have no
-  // unconditional decorative mark (no manner radical) to guarantee the
-  // connectivity contract on its own, so when this is the only extra stroke
-  // it must itself land on a literal chain coordinate.
-  // Same one-mark budget as buildConsonantStrokes: rounding is a core vowel
-  // feature (the vowel equivalent of voicing), so it wins over the
-  // added-on-tier overflow signal.
+/**
+ * A small mark riding in the ascender band above the cap rail, composed onto
+ * a base consonant glyph at word-composition time rather than stored as part
+ * of it (abugida vowel diacritics). Deliberately built on its own miniature
+ * frame rather than the script's armature: a diacritic that inherited the
+ * full skeleton would be a second letter stacked on the first, not a mark.
+ * It's the one glyph kind exempt from the rail rule, because sitting outside
+ * the rails is exactly what makes it read as a diacritic.
+ */
+function buildVowelDiacriticStrokes(phoneme: VowelPhoneme, style: ScriptStyle, geometry: GeometryProfile): Stroke[] {
+  const bandTop = style.xHeightY * 0.15;
+  const bandBottom = style.xHeightY * 0.8;
+  const width = (style.viewBoxSize - style.sideBearing * 2) * 0.4;
+  const left = (style.viewBoxSize - width) / 2;
+  const x = left + VOWEL_BACKNESS_X[phoneme.features.backness] * width;
+  // Height slides a fixed-length mark down the band rather than stretching
+  // it between the band edges: a mark whose length varied with height would
+  // collapse to zero at `low` (its top and bottom coinciding), the same
+  // degenerate-stroke failure mode the main glyph path guards against.
+  const markLength = (bandBottom - bandTop) * 0.5;
+  const top = bandTop + VOWEL_HEIGHT_Y[phoneme.features.height] * (bandBottom - bandTop - markLength);
+  const bottom = top + markLength;
+
+  const primary: Stroke =
+    style.cornerStyle === "rounded"
+      ? { kind: "curve", from: { x: left, y: bottom }, control: { x, y: top }, to: { x: left + width, y: bottom } }
+      : { kind: "line", from: { x, y: top }, to: { x, y: bottom } };
+  const strokes: Stroke[] = [primary];
+  // Anchored on the mark's own endpoint, not an independently computed
+  // point: with no armature to fall back on, a diacritic's rounding dot is
+  // the one stroke that would otherwise float free of the glyph entirely.
   if (phoneme.features.rounded) {
-    strokes.push({ kind: "dot", center: end, radius: style.strokeWidth });
-  } else if (markOverflow) {
-    strokes.push(buildOverflowMark(start, style));
-  }
-  return { strokes: clampStrokes(strokes, style.viewBoxSize), chainStart: clampPoint(start, style.viewBoxSize), chainEnd: clampPoint(end, style.viewBoxSize) };
-}
-
-/** A smaller mark in the ascender band above x-height, composed onto a base consonant glyph at word-composition time rather than stored as part of it (abugida vowel diacritics). Previously drew its primary stroke across the same full x-height→baseline band as a consonant (the ascender-band placement only ever applied to the optional rounding dot) — now the primary stroke itself lives in the ascender band, keyed by height, so diacritics actually read as a small mark riding above the base glyph. */
-function buildVowelDiacriticStrokes(phoneme: VowelPhoneme, style: ScriptStyle, geometry: GeometryProfile, rng: Rng): Stroke[] {
-  const xBias = VOWEL_BACKNESS_X[phoneme.features.backness];
-  const ascenderTop = style.xHeightY * 0.15;
-  const ascenderBottom = style.xHeightY * 0.9;
-  const yBand = heightBand(phoneme.features.height, ascenderTop, ascenderBottom);
-  const { strokes, end } = buildConnectedStrokes(VOWEL_STROKE_KINDS, 1, xBias, yBand, style, geometry, rng);
-  if (phoneme.features.rounded) {
-    strokes.push({ kind: "dot", center: end, radius: style.strokeWidth * 0.8 });
+    strokes.push({ kind: "dot", center: primary.to, radius: style.strokeWidth * geometry.dotScale * 0.8 });
   }
   return clampStrokes(strokes, style.viewBoxSize);
 }
 
+/**
+ * One syllable = one glyph on ONE armature: the consonant picks the primary
+ * attachment and the vowel a second one on the same skeleton. v1 built the
+ * consonant and vowel as two independent chains in different regions and
+ * joined them with a bridge line, which read as two adjacent letterforms
+ * sharing an id rather than a single syllabic sign.
+ */
 function buildSyllableStrokes(
   consonantId: string | null,
   vowelId: string,
@@ -556,27 +741,44 @@ function buildSyllableStrokes(
 ): Stroke[] {
   const vowel = phonology.vowels.find((v) => v.id === vowelId);
   if (!vowel) return [];
-  const vowelSet = buildVowelStrokes(vowel, style, geometry, rng);
   const consonant = consonantId ? phonology.consonants.find((c) => c.id === consonantId) : undefined;
-  if (!consonant) return vowelSet.strokes;
-  const consonantSet = buildConsonantStrokes(consonant, style, geometry, rng);
-  // The consonant and vowel are each their own independently-built connected
-  // chain (different xBias/yBand) — concatenating their strokes alone never
-  // joins them to one another, only within themselves. A short bridge line
-  // from the consonant's own chain end to the vowel's own chain start makes
-  // the pair read as one syllable glyph instead of two adjacent, unrelated
-  // letterforms sharing an id.
-  const bridge: Stroke = { kind: "line", from: consonantSet.chainEnd, to: vowelSet.chainStart };
-  return [...consonantSet.strokes, bridge, ...vowelSet.strokes];
+  if (!consonant) return buildVowelStrokes(vowel, style, geometry, rng);
+
+  return buildGlyphStrokes(
+    {
+      position: ORIENTATION_BY_PLACE[consonant.features.place],
+      preference: ATTACHMENT_BY_MANNER[consonant.features.manner],
+      featureKey: `manner:${consonant.features.manner}`,
+      mark: null,
+      attachmentBudget: SYLLABLE_ATTACHMENT_BUDGET,
+      secondary: {
+        position: VOWEL_HEIGHT_Y[vowel.features.height],
+        preference: VOWEL_ATTACHMENT_PREFERENCE,
+        featureKey: `backness:${vowel.features.backness}`,
+      },
+    },
+    style,
+    geometry,
+    rng,
+  );
 }
 
-/** Logographic glyphs have no phoneme features to key off — composed from the full stroke vocabulary across the whole grid instead of a manner/place-constrained family. */
+/** Logographic glyphs have no phonological features to key off, so their anchor stops and attachment shapes come straight from the item's own seeded rng — but they are still built on the script's shared armature, which is what keeps a logography reading as one writing system. */
 function buildConceptStrokes(style: ScriptStyle, geometry: GeometryProfile, rng: Rng): Stroke[] {
-  const yBand: [number, number] = [style.xHeightY, style.baselineY];
-  const count = rng.int(style.strokeCountRange[0], style.strokeCountRange[1] + 1);
-  const xBias = rng.float();
-  return clampStrokes(buildConnectedStrokes(ALL_STROKE_KINDS, count, xBias, yBand, style, geometry, rng).strokes, style.viewBoxSize);
+  return buildGlyphStrokes(
+    {
+      position: rng.float(),
+      preference: rng.shuffle(CONCEPT_ATTACHMENT_PREFERENCE),
+      featureKey: "concept",
+      mark: null,
+      attachmentBudget: CONCEPT_ATTACHMENT_BUDGET,
+    },
+    style,
+    geometry,
+    rng,
+  );
 }
+
 
 const PREVIEW_SAMPLE_COUNT = 4;
 const PREVIEW_SALT = 0xfeed;
@@ -602,9 +804,12 @@ export function sampleGlyphs(
   phonology: PhonologyData,
   seedBase: number,
 ): { style: ScriptStyle; glyphs: Glyph[] } {
-  const previewSeedBase = deriveSeed(seedBase, hashString(`${params.scriptCategory}:${params.aesthetic}`) ^ PREVIEW_SALT);
-  const style = buildScriptStyle(params.aesthetic, previewSeedBase);
-  const geometry = buildGeometryProfile(style.cornerStyle, previewSeedBase, params.ancestorScript);
+  // ancestorScript is part of the key because it now picks the armature —
+  // the single most visible thing about a script. Leaving it out would show
+  // an identical preview for "free generation" and "Devanagari-derived."
+  const previewSeedBase = deriveSeed(seedBase, hashString(`${params.scriptCategory}:${params.aesthetic}:${params.ancestorScript ?? "free"}`) ^ PREVIEW_SALT);
+  const style = buildScriptStyle(params.aesthetic, previewSeedBase, params.ancestorScript);
+  const geometry = buildGeometryProfile(previewSeedBase);
   const rng = new Rng(previewSeedBase);
   const placeholderSeed: Seed = { base: previewSeedBase, variation: 0 };
 
@@ -615,7 +820,7 @@ export function sampleGlyphs(
         return phonology.consonants.slice(0, PREVIEW_SAMPLE_COUNT).map((c) => ({
           id: c.id,
           kind: "consonant" as const,
-          strokes: buildConsonantStrokes(c, style, geometry, rng).strokes,
+          strokes: buildConsonantStrokes(c, style, geometry, rng),
           seed: placeholderSeed,
           locked: false,
         }));
@@ -628,14 +833,14 @@ export function sampleGlyphs(
           {
             id: consonant.id,
             kind: "consonant" as const,
-            strokes: buildConsonantStrokes(consonant, style, geometry, rng).strokes,
+            strokes: buildConsonantStrokes(consonant, style, geometry, rng),
             seed: placeholderSeed,
             locked: false,
           },
           {
             id: `diacritic:${vowel.id}`,
             kind: "vowelDiacritic" as const,
-            strokes: buildVowelDiacriticStrokes(vowel, style, geometry, rng),
+            strokes: buildVowelDiacriticStrokes(vowel, style, geometry),
             seed: placeholderSeed,
             locked: false,
           },
@@ -645,7 +850,7 @@ export function sampleGlyphs(
         const consonantId = phonology.consonants[0]?.id ?? null;
         return phonology.vowels
           .slice(0, PREVIEW_SAMPLE_COUNT)
-          .map((v) => buildGlyphForSyllable(consonantId, v.id, phonology, style, previewSeedBase, params.ancestorScript));
+          .map((v) => buildGlyphForSyllable(consonantId, v.id, phonology, style, previewSeedBase));
       }
       case "logographic": {
         return Array.from({ length: PREVIEW_SAMPLE_COUNT }, (_, i) => ({
@@ -720,12 +925,11 @@ export function buildGlyphForSyllable(
   phonology: PhonologyData,
   style: ScriptStyle,
   seedBase: number,
-  ancestorScript: AncestorScriptFamily | null,
 ): Glyph {
   const id = syllableGlyphId(consonantId, vowelId);
   const seed: Seed = { base: deriveSeed(seedBase, hashString(id)), variation: 0 };
   const rng = new Rng(deriveSeed(seed.base, seed.variation));
-  const geometry = buildGeometryProfile(style.cornerStyle, seedBase, ancestorScript);
+  const geometry = buildGeometryProfile(seedBase);
   return {
     id,
     kind: "syllable",
@@ -863,12 +1067,12 @@ function alphabeticPlan(
   const consonants = planWithOverflow(phonology.consonants, CONSONANT_GLYPH_BUDGET, overflowStrategy, seedBase, (c, markOverflow) => ({
     id: c.id,
     kind: "consonant" as const,
-    build: (rng: Rng) => buildConsonantStrokes(c, style, geometry, rng, markOverflow).strokes,
+    build: (rng: Rng) => buildConsonantStrokes(c, style, geometry, rng, markOverflow),
   }));
   const vowels = planWithOverflow(phonology.vowels, VOWEL_GLYPH_BUDGET, overflowStrategy, seedBase, (v, markOverflow) => ({
     id: v.id,
     kind: "vowel" as const,
-    build: (rng: Rng) => buildVowelStrokes(v, style, geometry, rng, markOverflow).strokes,
+    build: (rng: Rng) => buildVowelStrokes(v, style, geometry, rng, markOverflow),
   }));
   return { plan: [...consonants.plan, ...vowels.plan], rules: [...consonants.rules, ...vowels.rules] };
 }
@@ -883,7 +1087,7 @@ function abjadPlan(
   return planWithOverflow(phonology.consonants, CONSONANT_GLYPH_BUDGET, overflowStrategy, seedBase, (c, markOverflow) => ({
     id: c.id,
     kind: "consonant" as const,
-    build: (rng: Rng) => buildConsonantStrokes(c, style, geometry, rng, markOverflow).strokes,
+    build: (rng: Rng) => buildConsonantStrokes(c, style, geometry, rng, markOverflow),
   }));
 }
 
@@ -898,12 +1102,12 @@ function abugidaPlan(
   const consonants = planWithOverflow(phonology.consonants, CONSONANT_GLYPH_BUDGET, overflowStrategy, seedBase, (c, markOverflow) => ({
     id: c.id,
     kind: "consonant" as const,
-    build: (rng: Rng) => buildConsonantStrokes(c, style, geometry, rng, markOverflow).strokes,
+    build: (rng: Rng) => buildConsonantStrokes(c, style, geometry, rng, markOverflow),
   }));
   const vowelPlan: GlyphPlan[] = phonology.vowels.map((v) => ({
     id: `diacritic:${v.id}`,
     kind: "vowelDiacritic" as const,
-    build: (rng: Rng) => buildVowelDiacriticStrokes(v, style, geometry, rng),
+    build: () => buildVowelDiacriticStrokes(v, style, geometry),
   }));
   return { plan: [...consonants.plan, ...vowelPlan], rules: consonants.rules };
 }
@@ -931,6 +1135,55 @@ function logographicPlan(lexiconItems: LexiconItemData[], style: ScriptStyle, ge
   return { plan, rules: [] };
 }
 
+/**
+ * How many times a glyph will be redrawn to get away from a shape another
+ * glyph in the same script already took. The armature/attachment space is
+ * finite by design — a script that used every shape would not read as a
+ * script — so a large glyph set on a narrow vocabulary can genuinely run out
+ * of distinct forms, and this has to give up rather than loop forever. It
+ * degrades to "duplicate present," never to "hung."
+ *
+ * Measured: raising this to 32 moved the mean duplicate rate by 0.09pp and
+ * the worst case not at all, so whatever still collides at 12 is exhausted
+ * space rather than unlucky draws. Spending more attempts on it just burns
+ * cycles; the lever that actually works is the attachment budget (see
+ * SYLLABLE_ATTACHMENT_BUDGET / CONCEPT_ATTACHMENT_BUDGET in content.ts).
+ */
+const MAX_DEDUP_ATTEMPTS = 12;
+
+/**
+ * A glyph's visual identity, order- and direction-independent: two glyphs
+ * with the same strokes drawn in a different sequence, or the same line
+ * drawn end-to-start, are the same letter to a reader. Coordinates round to
+ * 2dp so float noise from the shear can't pass two identical glyphs off as
+ * distinct.
+ *
+ * Deliberately computed here rather than by comparing render.ts's path
+ * output: rendering is a separate, always-re-derivable step (see that file's
+ * header), and generation shouldn't take a dependency on it. Canonicalizing
+ * the strokes is also strictly stricter — glyphToSvgPath's own subpath
+ * merging can make two different stroke sets share a `d` string.
+ */
+function glyphSignature(strokes: Stroke[]): string {
+  const n = (value: number) => Math.round(value * 100) / 100;
+  const at = (point: Point) => `${n(point.x)},${n(point.y)}`;
+  return strokes
+    .map((stroke) => {
+      switch (stroke.kind) {
+        case "line":
+          return `l:${[at(stroke.from), at(stroke.to)].sort().join(">")}`;
+        case "curve":
+          return `c:${[at(stroke.from), at(stroke.to)].sort().join(">")}:${at(stroke.control)}`;
+        case "dot":
+          return `d:${at(stroke.center)}:${n(stroke.radius)}`;
+        case "hook":
+          return `h:${at(stroke.anchor)}:${n(stroke.angle)}:${n(stroke.length)}:${n(stroke.curvature)}`;
+      }
+    })
+    .sort()
+    .join("|");
+}
+
 function resolveGlyphs(
   plan: GlyphPlan[],
   seed: Seed,
@@ -940,23 +1193,41 @@ function resolveGlyphs(
   keepProbability: number,
 ): Glyph[] {
   const glyphs: Glyph[] = [];
+  // An alphabet whose letters aren't telling each other apart isn't an
+  // alphabet. Feature-driven placement alone can't guarantee this: place of
+  // articulation maps 11 values onto 5-7 anchor stops and manner maps 12
+  // onto a 3-4 shape vocabulary, so collisions are expected by construction
+  // rather than exceptional. Every emitted glyph claims its shape here and
+  // later ones redraw around it.
+  const claimed = new Set<string>();
   for (const planned of plan) {
     const prev = previousById.get(planned.id);
-    if (prev?.locked) {
+    // Locked and nudge-kept glyphs are carried through untouched — they
+    // still claim their shape so later glyphs steer around them, but they
+    // are never themselves redrawn to resolve a collision.
+    if (prev?.locked || (mode === "nudge" && prev && rng.chance(keepProbability))) {
       glyphs.push(prev);
-      continue;
-    }
-    if (mode === "nudge" && prev && rng.chance(keepProbability)) {
-      glyphs.push(prev);
+      claimed.add(glyphSignature(prev.strokes));
       continue;
     }
 
-    const itemSeed: Seed =
+    let itemSeed: Seed =
       mode === "nudge" && prev
         ? { base: prev.seed.base, variation: prev.seed.variation + 1 }
         : { base: deriveSeed(seed.base, hashString(planned.id)), variation: 0 };
-    const itemRng = new Rng(deriveSeed(itemSeed.base, itemSeed.variation));
-    glyphs.push({ id: planned.id, kind: planned.kind, strokes: planned.build(itemRng), seed: itemSeed, locked: false });
+    let strokes = planned.build(new Rng(deriveSeed(itemSeed.base, itemSeed.variation)));
+
+    // `variation` advances rather than a private dedup counter so the stored
+    // seed still reproduces the stored strokes on its own — the whole point
+    // of persisting a seed per glyph. Nudge just continues from wherever
+    // dedup left off, which is exactly what it already does.
+    for (let attempt = 0; attempt < MAX_DEDUP_ATTEMPTS && claimed.has(glyphSignature(strokes)); attempt++) {
+      itemSeed = { base: itemSeed.base, variation: itemSeed.variation + 1 };
+      strokes = planned.build(new Rng(deriveSeed(itemSeed.base, itemSeed.variation)));
+    }
+
+    glyphs.push({ id: planned.id, kind: planned.kind, strokes, seed: itemSeed, locked: false });
+    claimed.add(glyphSignature(strokes));
   }
   return glyphs;
 }
@@ -1014,12 +1285,17 @@ export function generateOrthography(args: GenerateOrthographyArgs): OrthographyS
 
   // A nudge never touches the shared grid — only reroll/param-change does,
   // so mid-script "flavor" tweaks never fight the script's own coherence.
-  const scriptStyle = mode === "nudge" && previous ? previous.scriptStyle : buildScriptStyle(params.aesthetic, seed.base);
-  // Geometry is a pure function of (cornerStyle, seed.base, ancestorScript),
-  // and nudge keeps seed.base/ancestorScript fixed (only variation advances)
-  // — so this stays stable across nudges for the same reason scriptStyle
-  // does, without needing its own nudge/reroll branch.
-  const geometry = buildGeometryProfile(scriptStyle.cornerStyle, seed.base, params.ancestorScript);
+  // The version guard is the one exception: a pre-v2 style carries no
+  // armature at all, and every builder below reads one, so carrying it
+  // forward would mean building v2 glyphs against a v1 grid. A nudge on a
+  // pre-v2 language rebuilds the style instead — the glyphs are getting
+  // regenerated by this patch either way (see queries.ts's staleness check).
+  const canReuseStyle = mode === "nudge" && previous?.scriptStyle?.version === 2;
+  const scriptStyle = canReuseStyle ? previous.scriptStyle : buildScriptStyle(params.aesthetic, seed.base, params.ancestorScript);
+  // Geometry is a pure function of seed.base, and nudge keeps seed.base fixed
+  // (only variation advances) — so this stays stable across nudges for the
+  // same reason scriptStyle does, without needing its own branch.
+  const geometry = buildGeometryProfile(seed.base);
 
   const previousGlyphsById = new Map((previous?.glyphs ?? []).map((g) => [g.id, g] as const));
 

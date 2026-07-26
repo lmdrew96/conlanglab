@@ -119,6 +119,12 @@ export function OrthographyPage({ languageId }: { languageId: Id<"languages"> })
   const stageLocked = orthographyRow?.locked ?? false;
   const needsLexicon = draftParams.scriptCategory === "syllabic" || draftParams.scriptCategory === "logographic";
   const lexiconMissing = needsLexicon && !lexiconRow;
+  // Glyphs stored before the armature rewrite were built by a different
+  // algorithm against a grid that no longer exists, so they keep rendering
+  // as-is until rerolled. Convex stores stage data as v.any() with no
+  // migration path, and silently regenerating would blow away any locked
+  // glyphs — so this surfaces the choice instead of making it.
+  const scriptOutdated = committed != null && committed.scriptStyle.version !== 2;
 
   async function handleGenerateInitial() {
     setBusy(true);
@@ -204,6 +210,12 @@ export function OrthographyPage({ languageId }: { languageId: Id<"languages"> })
         ) : (
           <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_20rem]">
             <div className="flex flex-col gap-6">
+              {scriptOutdated && (
+                <p className="rounded-md border border-accent/40 bg-accent/10 px-3 py-2 text-xs text-accent">
+                  This script was generated before the glyph engine was rebuilt around a shared armature. Reroll to
+                  regenerate it with the current engine — locked glyphs are preserved.
+                </p>
+              )}
               <div className="flex flex-wrap gap-2">
                 <button
                   type="button"

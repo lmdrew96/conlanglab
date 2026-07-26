@@ -28,7 +28,6 @@ function resolveGlyph(id: string, data: OrthographyStageData, phonology: Phonolo
     phonology,
     data.scriptStyle,
     data.seed.base,
-    data.params.ancestorScript,
   );
 }
 

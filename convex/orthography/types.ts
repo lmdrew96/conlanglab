@@ -80,19 +80,78 @@ export type Stroke =
   | { kind: "hook"; anchor: Point; angle: number; length: number; curvature: number };
 
 /**
+ * The load-bearing skeleton every glyph in a script is built on, drawn
+ * identically in every one of them. This is the mechanism Section 14.2 was
+ * reaching for and the pre-v2 "shared stroke vocabulary" never actually
+ * delivered: sharing a *pool of stroke kinds* across glyphs produces N
+ * unrelated shapes that happen to be made of similar marks, which is why
+ * generated sets read as scribbles. Every real constructed script instead
+ * shares a literal structural motif — Britannian hangs every letter off a
+ * vertical stem, Devanagari off a headline, Tau builds each one inside a
+ * closed box — and the per-letter variation is only ever *what attaches
+ * where*. Measured against the reference fonts in fonts/scripts/, the
+ * disciplined ones hold every letter's ink to within 0.002-0.016 em of the
+ * same two horizontal rails; the pre-v2 random walk drifted 0.10-0.19.
+ *
+ * - stemLeft/stemRight: a vertical stroke at one side; attachments reach across.
+ * - headline/baseRule: a horizontal rail; attachments hang below / rise above.
+ * - frame: a closed box; attachments cross its interior.
+ * - spine: a centered vertical; attachments reach out both ways.
+ * - none: no armature stroke drawn at all — coherence comes from the shared
+ *   rails and attachment vocabulary alone, and the primary attachment is
+ *   required to span rail-to-rail on its own (the sweeping single-stroke look
+ *   of a cursive script).
+ */
+export type ArmatureKind = "stemLeft" | "stemRight" | "headline" | "baseRule" | "frame" | "spine" | "none";
+
+export const ARMATURE_KINDS: ArmatureKind[] = ["stemLeft", "stemRight", "headline", "baseRule", "frame", "spine", "none"];
+
+/**
+ * What a single glyph hangs off its script's armature. Every one of these
+ * starts at an anchor stop on the armature and terminates on either another
+ * stop or the opposite rail, so a glyph is always a connected figure on a
+ * shared lattice rather than a free walk.
+ */
+export type AttachmentKind = "arm" | "bowl" | "crossbar" | "flag" | "curl" | "pip";
+
+export const ATTACHMENT_KINDS: AttachmentKind[] = ["arm", "bowl", "crossbar", "flag", "curl", "pip"];
+
+/** The per-script armature choice — derived once per (seed.base, aesthetic, ancestorScript) and then held constant across every glyph, nudges included. */
+export interface ScriptArmature {
+  kind: ArmatureKind;
+  /** The 2-3 attachment kinds this script's glyphs may draw from. Narrower than the full vocabulary on purpose: a script that uses every shape reads as no script at all. */
+  attachments: AttachmentKind[];
+  /** How many quantized anchor stops sit along the armature's principal axis (4-6). The lattice every attachment endpoint snaps to. */
+  anchorStops: number;
+}
+
+/**
  * The shared visual grammar every glyph in a language's script must obey —
  * generated once per (seed, aesthetic), never per-glyph. A square canvas
- * grid with a shared baseline/x-height band, corner style, and stroke
- * width, so every glyph is visibly built from the same construction rules.
+ * with a shared baseline/x-height rail pair, corner style, stroke width,
+ * and (v2) the structural armature every glyph is built on, so every glyph
+ * is visibly built from the same construction rules.
+ *
+ * `version` is 2 as of the armature patch. Pre-v2 stored styles have no
+ * `armature`/`sideBearing` and their glyphs' coordinates were produced by a
+ * different algorithm entirely, so generation never reuses one (see
+ * generateOrthography's nudge branch) and queries.ts reports them stale so
+ * the UI can prompt a regenerate.
  */
 export interface ScriptStyle {
-  version: 1;
+  version: 2;
   viewBoxSize: number;
   baselineY: number;
   xHeightY: number;
   strokeWidth: number;
   cornerStyle: "sharp" | "rounded";
-  strokeCountRange: [number, number];
+  /** How many attachments a single glyph gets, before its optional feature mark. */
+  attachmentCountRange: [number, number];
+  armature: ScriptArmature;
+  /** Horizontal inset from the viewBox edge to the armature's own extent — the script's consistent side bearing. Reference fonts hold this near-constant across a whole alphabet; the pre-v2 generator drifted it per phoneme via place of articulation. */
+  sideBearing: number;
+  /** The script's lean, as a horizontal shear anchored at the baseline (positive = top leans right). Part of the shared grid rather than a per-glyph rendering detail, because `sideBearing` is computed to pay for the extra horizontal extent this adds — the two have to travel together or a leaning script overflows its viewBox. */
+  slant: number;
 }
 
 export type GlyphKind = "consonant" | "vowel" | "vowelDiacritic" | "syllable" | "concept";
