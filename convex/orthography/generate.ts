@@ -18,6 +18,7 @@ import {
   BOUNDARY_TREATMENT_TABLE,
   CONCEPT_ATTACHMENT_BUDGET,
   CONCEPT_ATTACHMENT_PREFERENCE,
+  DIACRITIC_SHAPE_BY_HEIGHT,
   ORIENTATION_BY_PLACE,
   SCRIPT_ATTACHMENT_VOCABULARY_RANGE,
   SECONDARY_MARK_POSITION,
@@ -696,30 +697,72 @@ function buildVowelStrokes(phoneme: VowelPhoneme, style: ScriptStyle, geometry: 
  * It's the one glyph kind exempt from the rail rule, because sitting outside
  * the rails is exactly what makes it read as a diacritic.
  */
-function buildVowelDiacriticStrokes(phoneme: VowelPhoneme, style: ScriptStyle, geometry: GeometryProfile): Stroke[] {
+function buildVowelDiacriticStrokes(phoneme: VowelPhoneme, style: ScriptStyle, geometry: GeometryProfile, rng: Rng): Stroke[] {
   const bandTop = style.xHeightY * 0.15;
   const bandBottom = style.xHeightY * 0.8;
   const width = (style.viewBoxSize - style.sideBearing * 2) * 0.4;
   const left = (style.viewBoxSize - width) / 2;
   const x = left + VOWEL_BACKNESS_X[phoneme.features.backness] * width;
+  const bandHeight = bandBottom - bandTop;
+  const centerY = bandTop + bandHeight * 0.5;
   // Height slides a fixed-length mark down the band rather than stretching
   // it between the band edges: a mark whose length varied with height would
   // collapse to zero at `low` (its top and bottom coinciding), the same
   // degenerate-stroke failure mode the main glyph path guards against.
-  const markLength = (bandBottom - bandTop) * 0.5;
-  const top = bandTop + VOWEL_HEIGHT_Y[phoneme.features.height] * (bandBottom - bandTop - markLength);
+  const markLength = bandHeight * 0.5;
+  const top = bandTop + VOWEL_HEIGHT_Y[phoneme.features.height] * (bandHeight - markLength);
   const bottom = top + markLength;
+  // A small deterministic wobble on top of the height/backness-driven
+  // placement, so two vowels landing on the same shape+position (e.g. two
+  // scripts both drawing a "tick" at the same backness) still don't render
+  // pixel-identical marks.
+  const jitter = (rng.float() - 0.5) * style.strokeWidth;
 
-  const primary: Stroke =
-    style.cornerStyle === "rounded"
-      ? { kind: "curve", from: { x: left, y: bottom }, control: { x, y: top }, to: { x: left + width, y: bottom } }
-      : { kind: "line", from: { x, y: top }, to: { x, y: bottom } };
-  const strokes: Stroke[] = [primary];
-  // Anchored on the mark's own endpoint, not an independently computed
-  // point: with no armature to fall back on, a diacritic's rounding dot is
-  // the one stroke that would otherwise float free of the glyph entirely.
+  const shape = DIACRITIC_SHAPE_BY_HEIGHT[phoneme.features.height];
+  const strokes: Stroke[] = [];
+  // Every branch also records `anchor`, one of its own stroke's real
+  // endpoints — not an independently computed point: with no armature to
+  // fall back on, a diacritic's rounding dot is the one stroke that would
+  // otherwise float free of the glyph entirely.
+  let anchor: Point;
+  switch (shape) {
+    case "tick": {
+      const from = { x: x + jitter, y: top };
+      strokes.push({ kind: "line", from, to: { x: x + jitter, y: bottom } });
+      anchor = from;
+      break;
+    }
+    case "longTick": {
+      const from = { x: x + jitter, y: bandTop };
+      strokes.push({ kind: "line", from, to: { x: x + jitter, y: bandBottom } });
+      anchor = from;
+      break;
+    }
+    case "arc": {
+      const from = { x: left, y: bottom };
+      strokes.push({ kind: "curve", from, control: { x, y: top + jitter }, to: { x: left + width, y: bottom } });
+      anchor = from;
+      break;
+    }
+    case "hook": {
+      const from = { x: x - markLength * 0.4, y: top };
+      strokes.push({ kind: "curve", from, control: { x, y: centerY + jitter }, to: { x: x + markLength * 0.4, y: bottom } });
+      anchor = from;
+      break;
+    }
+    case "chevron": {
+      const apex = { x, y: bottom };
+      const to = { x: x + markLength * 0.35 + jitter, y: top };
+      strokes.push(
+        { kind: "line", from: { x: x - markLength * 0.35, y: top }, to: apex },
+        { kind: "line", from: apex, to },
+      );
+      anchor = to;
+      break;
+    }
+  }
   if (phoneme.features.rounded) {
-    strokes.push({ kind: "dot", center: primary.to, radius: style.strokeWidth * geometry.dotScale * 0.8 });
+    strokes.push({ kind: "dot", center: anchor, radius: style.strokeWidth * geometry.dotScale * 0.8 });
   }
   return clampStrokes(strokes, style.viewBoxSize);
 }
@@ -840,7 +883,7 @@ export function sampleGlyphs(
           {
             id: `diacritic:${vowel.id}`,
             kind: "vowelDiacritic" as const,
-            strokes: buildVowelDiacriticStrokes(vowel, style, geometry),
+            strokes: buildVowelDiacriticStrokes(vowel, style, geometry, rng),
             seed: placeholderSeed,
             locked: false,
           },
@@ -1124,7 +1167,7 @@ function abugidaPlan(
   const vowelPlan: GlyphPlan[] = phonology.vowels.map((v) => ({
     id: `diacritic:${v.id}`,
     kind: "vowelDiacritic" as const,
-    build: () => buildVowelDiacriticStrokes(v, style, geometry),
+    build: (rng: Rng) => buildVowelDiacriticStrokes(v, style, geometry, rng),
   }));
   return { plan: [...consonants.plan, ...vowelPlan], rules: consonants.rules };
 }

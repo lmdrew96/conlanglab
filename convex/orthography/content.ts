@@ -172,6 +172,28 @@ export const VOWEL_BACKNESS_X: Record<VowelBackness, number> = {
 /** Vowels draw from the rounder end of the vocabulary — the visual contrast with consonants that alphabetic scripts generally maintain. Intersected with the script's own `attachments` vocabulary, same as the consonant path. */
 export const VOWEL_ATTACHMENT_PREFERENCE: AttachmentKind[] = ["bowl", "curl", "arm", "crossbar"];
 
+export type DiacriticShape = "tick" | "longTick" | "arc" | "hook" | "chevron";
+
+/**
+ * Abugida vowel diacritics keyed by height, alongside VOWEL_HEIGHT_Y/
+ * VOWEL_BACKNESS_X's mark placement — v1 varied only a mark's POSITION,
+ * built from a single primitive (a line, or a shallow arc — picked once for
+ * the whole script by cornerStyle), so vowels sharing backness rendered
+ * near-identical, sliding a few pixels apart. Height now also picks which of
+ * five distinct primitives draws the mark, the same "deterministic feature
+ * -> deterministic mark" idiom SECONDARY_MARK_POSITION already uses for
+ * consonants. All five are skeleton (line/curve) shapes, never a bare dot —
+ * a dot-only mark fails the same "no dot-only glyph" legibility rule the
+ * main letterform path already enforces.
+ */
+export const DIACRITIC_SHAPE_BY_HEIGHT: Record<VowelHeight, DiacriticShape> = {
+  high: "tick",
+  nearHigh: "chevron",
+  mid: "arc",
+  nearLow: "hook",
+  low: "longTick",
+};
+
 /** Logographic concepts have no phonological features to key off, so they draw from the script's whole vocabulary in seeded order. */
 export const CONCEPT_ATTACHMENT_PREFERENCE: AttachmentKind[] = ["arm", "bowl", "crossbar", "curl", "flag", "pip"];
 
