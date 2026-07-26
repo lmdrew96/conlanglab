@@ -191,6 +191,20 @@ function playStopBurst(ctx: AudioContext, dest: AudioNode, place: ConsonantPlace
 }
 
 /**
+ * Taps/trills had no transient of their own at all (every other manner gets
+ * one — see scheduleTapOrTrill's comment) and read as "doesn't sound
+ * rhotic," just a soft dip in the tract's own resonance. A tap is a single
+ * light touch with no pressure built up behind it the way a stop's closure
+ * has, so this reuses the stop's own place-centered frequency (same
+ * articulator, same place) but duller (lower Q — less spectrally peaky),
+ * quieter, and shorter than playStopBurst, so it reads as a brief contact
+ * rather than a released plosive.
+ */
+function playTapBurst(ctx: AudioContext, dest: AudioNode, place: ConsonantPlace, startAt: number, dur: number): void {
+  playNoiseBurst(ctx, dest, BURST_HZ[place], 0.9, startAt, dur, 0.32);
+}
+
+/**
  * Ejectives previously reused playStopBurst verbatim, which fixed an old
  * "quieter than /p/" bug but at the cost of making ejectives and plain stops
  * sound identical — same burst, same everything. Real ejectives build oral
@@ -267,6 +281,7 @@ async function play(units: Array<ConsonantPhoneme | VowelPhoneme>, stressedIndex
     if (event.kind === "click") playClickNoise(ctx, dest, event.place, startAt + event.atOffset);
     else if (event.kind === "stopBurst") playStopBurst(ctx, dest, event.place, startAt + event.atOffset, event.dur);
     else if (event.kind === "ejectiveBurst") playEjectiveBurst(ctx, dest, event.place, startAt + event.atOffset, event.dur);
+    else if (event.kind === "tapBurst") playTapBurst(ctx, dest, event.place, startAt + event.atOffset, event.dur);
     else {
       playFricativeNoise(ctx, dest, event.place, startAt + event.atOffset, event.dur);
       if (event.voiced) playVoiceHum(ctx, dest, startAt + event.atOffset, event.dur);

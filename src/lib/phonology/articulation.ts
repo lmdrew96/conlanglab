@@ -380,7 +380,7 @@ export interface NoiseEvent {
   dur: number;
   place: ConsonantPlace;
   voiced: boolean;
-  kind: "fricative" | "click" | "stopBurst" | "ejectiveBurst";
+  kind: "fricative" | "click" | "stopBurst" | "ejectiveBurst" | "tapBurst";
 }
 
 interface Cursor {
@@ -817,6 +817,16 @@ function scheduleTapOrTrill(
       if (i === 0) e.Glottis.intensity = 1;
       setShape(e, constrict(REST_SHAPE, index, 2, 0.1));
     });
+    // Every other manner gets a place-colored transient at its moment of
+    // contact/release (stopBurst/ejectiveBurst/fricative/click, all pushed
+    // elsewhere in this file) — taps/trills were the one category with
+    // none at all, relying purely on the tract's own resonance dip during
+    // closeDur. That dip alone read as a soft blip, not a distinct contact
+    // — reported as "doesn't sound rhotic at all." playTapBurst (audio.ts)
+    // gives each pulse a light, quiet, dull click (same place-centered
+    // frequency as a stop's burst, but shorter/quieter/less peaky — a tap
+    // is a brief touch, not a released pressure buildup like a stop).
+    cursor.noiseEvents.push({ atOffset: cursor.time, dur: closeDur, place, voiced: true, kind: "tapBurst" });
     cursor.time += closeDur;
     at(cursor, (e) => setShape(e, isLastPulse ? closeInto : REST_SHAPE));
     cursor.time += openDur;
