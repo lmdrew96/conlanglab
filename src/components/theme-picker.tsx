@@ -45,8 +45,8 @@ export function ThemePicker() {
   const { setTheme } = useTheme();
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-6">
-      <div className="w-full max-w-2xl rounded-xl bg-neutral-900 p-8">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 sm:p-6">
+      <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-xl bg-neutral-900 p-5 sm:p-8">
         <h2 className="mb-1 text-xl font-semibold text-white">Pick a look</h2>
         <p className="mb-6 text-sm text-neutral-400">
           Purely aesthetic — you can change this anytime in settings.

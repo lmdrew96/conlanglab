@@ -27,7 +27,7 @@ export function Dial({
   min = 0,
   max = 1,
   step = 0.05,
-  size = 48,
+  size = 56,
   label,
 }: {
   value: number;

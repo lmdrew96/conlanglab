@@ -185,7 +185,7 @@ export function SyntaxPage({ languageId }: { languageId: Id<"languages"> }) {
   return (
     <div className="flex flex-1 flex-col">
       <Header />
-      <div className="mx-auto flex w-full max-w-[80vw] flex-1 flex-col gap-6 p-6">
+      <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6 p-4 sm:p-6">
         <div>
           <Link href={`/language/${languageId}`} className="text-sm text-text-muted hover:text-text">
             ← {language.name}
