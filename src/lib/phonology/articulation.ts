@@ -540,35 +540,26 @@ function scheduleStop(cursor: Cursor, place: ConsonantPlace, voiced: boolean, cl
   cursor.noiseEvents.push({ atOffset: cursor.time, dur: 0.016, place, voiced, kind: "stopBurst" });
 
   if (voiced) {
-    // Releasing straight into `closeInto` is the right target when `next`
-    // is a vowel: closeInto IS the vowel's own broad articulatory shape, so
-    // the transition already carries THIS consonant's own place (`index`
-    // was coarticulated toward the vowel above). But when `next` is
-    // ANOTHER CONSONANT, closeInto = anticipatedShape(next) is a function
-    // of next ALONE — it carries zero information about where this
-    // consonant's own closure was. Two different-place stops releasing
-    // into the same following consonant therefore converge onto an
-    // IDENTICAL target, differing only in the ~16ms burst above — real
-    // place cues live in the formant transition off a stop's OWN place in
-    // the ~20-40ms right after release, which this skipped entirely.
-    // Reported as "/g/ sounds like /b/" in clusters like /gɾ/. A brief
-    // release locus at this consonant's own place (partially open, not the
-    // full closure and not wide-open REST either) before moving on to
-    // `closeInto` restores that transition.
-    const releasesIntoConsonant = next !== undefined && !isVowelUnit(next);
     at(cursor, (e) => {
       e.Tract.movementSpeed = 24;
       e.Glottis.isTouched = !isFinal;
       if (!isFinal) e.Glottis.UITenseness = NEUTRAL_TENSENESS;
-      setShape(e, releasesIntoConsonant ? constrict(REST_SHAPE, index, 3, 0.5) : closeInto);
+      setShape(e, closeInto);
     });
-    if (releasesIntoConsonant) {
-      cursor.time += 0.03;
-      at(cursor, (e) => setShape(e, closeInto));
-      cursor.time += 0.08;
-    } else {
-      cursor.time += 0.11;
-    }
+    // 0.11s of open glide is right for a following VOWEL (a real,
+    // gradual articulatory move into an open target) but far too long
+    // when `next` is ANOTHER CONSONANT — there's no vowel to glide into,
+    // so spending 110ms passing through REST_SHAPE-like open values
+    // before the next consonant's own closure even starts reads as a
+    // whole extra vowel inserted between the two (reported as "/bɾ/
+    // sounds like /əbɛɾ/" — a phantom vowel right before the tap; a
+    // previous attempt at fixing this by inserting an intermediate
+    // release shape here made it WORSE, adding an audible extra
+    // consonant-like transient of its own). Real CC transitions run tens
+    // of ms, not 110 — cutting straight to the next consonant's own
+    // scheduling (which starts its own closing gesture immediately)
+    // removes the gap instead of trying to fill it with more content.
+    cursor.time += next !== undefined && !isVowelUnit(next) ? 0.02 : 0.11;
     return;
   }
 
