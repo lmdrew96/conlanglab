@@ -41,6 +41,22 @@ export interface PinkTromboneModule {
     intensity: number;
     /** Resolved per-glottal-cycle pitch (Hz), set by setupWaveform from the block-rate oldFrequency/newFrequency crossfade. */
     frequency: number;
+    /**
+     * Block-rate (~11.6ms) smoothed approach toward UIFrequency — finishBlock
+     * moves this at most ×1.1 (or /1.1) per block rather than snapping, so
+     * a UIFrequency change several times the current value away (e.g. the
+     * vendor's own 140Hz default vs. this engine's ~205Hz target register)
+     * takes multiple blocks to actually arrive. oldFrequency/newFrequency
+     * are the same block-rate crossfade's endpoints, read by setupWaveform.
+     * None of the three are reset by runGestures on their own — see its
+     * comment for why that made playback itself non-deterministic.
+     */
+    smoothFrequency: number;
+    oldFrequency: number;
+    newFrequency: number;
+    /** Same block-rate smoothing as smoothFrequency, but for UITenseness — see finishBlock's oldTenseness/newTenseness crossfade. */
+    oldTenseness: number;
+    newTenseness: number;
     /** 1/frequency — read by runStep to detect the next cycle boundary. */
     waveformLength: number;
     /** Seconds since this voice started; the vendor's own vibrato uses it as a phase clock, and so does our jitter/shimmer wrapper (see attachCycleNaturalness). */
@@ -202,6 +218,28 @@ export async function runGestures(steps: GestureStep[]): Promise<PinkTromboneMod
   // deterministic state rather than wherever the last one left off.
   engine.AudioSystem.masterGain.gain.cancelScheduledValues(engine.AudioSystem.audioContext.currentTime);
   engine.AudioSystem.masterGain.gain.value = 1;
+  // Same "shared singleton voice" reasoning as the diameter/gain resets
+  // above, extended to pitch/tenseness/intensity — three MORE fields the
+  // vendor smooths at block rate (~11.6ms) rather than snapping to their
+  // target (see the Glottis type's own comments), that setting
+  // UIFrequency/UITenseness alone doesn't touch. Left unreset, a fresh page
+  // load starts from the vendor's own defaults (140Hz/0.6 tenseness/0
+  // intensity) and audibly ramps toward this engine's actual ~205Hz voiced
+  // register and full intensity over the first ~50-90ms — while every
+  // replay after that inherits whatever the PREVIOUS play's last segment
+  // left behind (already close to target) and starts instantly instead.
+  // Same phoneme sequence, audibly different first play vs. every play
+  // after — reported directly (a click right after refresh sounds
+  // different from every click after that). 205 mirrors articulation.ts's
+  // VOICED_PITCH and 0.6 its NEUTRAL_TENSENESS (not imported directly —
+  // that file already imports FROM this one, and this module stays
+  // phoneme-model-agnostic).
+  engine.Glottis.smoothFrequency = 205;
+  engine.Glottis.oldFrequency = 205;
+  engine.Glottis.newFrequency = 205;
+  engine.Glottis.oldTenseness = 0.6;
+  engine.Glottis.newTenseness = 0.6;
+  engine.Glottis.intensity = 1;
   for (const step of steps) {
     const id = setTimeout(() => step.apply(engine), Math.max(0, step.at * 1000));
     pendingTimeouts.push(id);
